@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Zunia",
+    "slug": "zunia-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#10214F"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.zuniawallet.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#10214F"
+      },
+      "package": "com.zuniawallet.mobile"
+    },
+    "scheme": "zunia"
+  }
+}
