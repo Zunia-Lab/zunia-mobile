@@ -1,13 +1,20 @@
 # zunia-mobile
 
-> iOS and Android wallet for Zunia (React Native + Expo). Same keys as the browser extension.
+> iOS and Android wallet for Zunia, built with **Flutter**. Same keys as the browser extension.
 
 [![License](https://img.shields.io/github/license/Zunia-Lab/zunia-mobile)](LICENSE)
 [![Website](https://img.shields.io/badge/website-zuniawallet.com-2050C4)](https://zuniawallet.com)
 
 ## Overview
 
-Non-custodial mobile wallet for the Cosmos ecosystem. Connects to dApps via WalletConnect. Chain lists come from [zunia-chain-registry](https://github.com/Zunia-Lab/zunia-chain-registry).
+Non-custodial multi-chain Cosmos wallet. Targets:
+
+| Platform | Output |
+|----------|--------|
+| Android | APK / App Bundle (`com.zuniawallet.zunia_mobile`) |
+| iOS | IPA (`com.zuniawallet.zuniaMobile`) |
+
+Chain metadata comes from [zunia-chain-registry](https://github.com/Zunia-Lab/zunia-chain-registry). Visual tokens follow [zunia-brand](https://github.com/Zunia-Lab/zunia-brand) / [zunia-ui](https://github.com/Zunia-Lab/zunia-ui).
 
 ## Status
 
@@ -23,30 +30,67 @@ In development (alpha). Not on App Store / Play Store yet.
 | [zunia-docs](https://github.com/Zunia-Lab/zunia-docs) | Documentation |
 | [zunia-website](https://github.com/Zunia-Lab/zunia-website) | Marketing site |
 | [zunia-brand](https://github.com/Zunia-Lab/zunia-brand) | Brand assets |
-| [zunia-ui](https://github.com/Zunia-Lab/zunia-ui) | Shared UI components |
+| [zunia-ui](https://github.com/Zunia-Lab/zunia-ui) | Shared design tokens / web UI |
+
+## Requirements
+
+- [Flutter](https://docs.flutter.dev/get-started/install) 3.24+ (stable)
+- Xcode (iOS) / Android Studio SDK (Android)
+
+```bash
+flutter doctor
+```
 
 ## Quick start
 
 ```bash
-npm install
-npx expo start
+flutter pub get
+flutter run                 # connected device / simulator
+flutter run -d ios
+flutter run -d android
 ```
 
-Scan with Expo Go, or press `i` / `a` for simulator.
+## Build release outputs
+
+```bash
+# Android App Bundle (Play Store)
+flutter build appbundle --release
+
+# Android APK
+flutter build apk --release
+
+# iOS (requires signing in Xcode)
+flutter build ipa --release
+```
+
+Artifacts:
+
+- `build/app/outputs/bundle/release/app-release.aab`
+- `build/app/outputs/flutter-apk/app-release.apk`
+- `build/ios/ipa/*.ipa`
+
+## Project layout
+
+```
+lib/
+  main.dart
+  theme/zunia_theme.dart      # Brand colors + typography
+  screens/home_screen.dart
+  widgets/zunia_widgets.dart  # Amount, Address, Surface
+android/                      # Android host
+ios/                          # iOS host
+assets/brand/                 # App mark from zunia-brand
+```
 
 ## Development
 
 | Command | Description |
 |---------|-------------|
-| `npm start` | Expo dev server |
-| `npm run ios` | iOS simulator |
-| `npm run android` | Android emulator |
-
-Requires Node.js 20+. WalletConnect and hardware wallet support land in later milestones.
-
-## Deployment
-
-EAS Build / Submit for App Store and Play Store. Deep link scheme: `zunia://`. Bundle IDs: `com.zuniawallet.mobile`.
+| `flutter run` | Debug on device/simulator |
+| `flutter test` | Widget tests |
+| `flutter analyze` | Static analysis |
+| `flutter build apk` | Android release APK |
+| `flutter build ipa` | iOS release IPA |
 
 ## Contributing
 
@@ -54,7 +98,7 @@ See [CONTRIBUTING.md](https://github.com/Zunia-Lab/.github/blob/main/CONTRIBUTIN
 
 ## Security
 
-See [SECURITY.md](https://github.com/Zunia-Lab/.github/blob/main/SECURITY.md). Never include seed phrases in issues or PRs.
+See [SECURITY.md](./SECURITY.md). Never include seed phrases in issues or PRs.
 
 ## License
 
