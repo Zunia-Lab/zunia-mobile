@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:zunia_mobile/theme/zunia_theme.dart';
 import 'package:zunia_mobile/widgets/zunia_widgets.dart';
 
@@ -28,7 +27,7 @@ class HomeScreen extends StatelessWidget {
                     const SizedBox(width: 12),
                     Text(
                       'zunia',
-                      style: GoogleFonts.spaceGrotesk(
+                      style: zuniaSans(
                         fontSize: 22,
                         fontWeight: FontWeight.w500,
                         letterSpacing: -0.8,
@@ -40,7 +39,7 @@ class HomeScreen extends StatelessWidget {
                 const Spacer(),
                 Text(
                   'One wallet for\nevery Cosmos chain.',
-                  style: GoogleFonts.spaceGrotesk(
+                  style: zuniaSans(
                     fontSize: 34,
                     fontWeight: FontWeight.w500,
                     height: 1.12,
@@ -51,7 +50,7 @@ class HomeScreen extends StatelessWidget {
                 const SizedBox(height: 14),
                 Text(
                   'Non-custodial. IBC-native. Same keys as the browser extension.',
-                  style: GoogleFonts.spaceGrotesk(
+                  style: zuniaSans(
                     fontSize: 16,
                     height: 1.5,
                     color: ZuniaColors.muted,
@@ -86,7 +85,7 @@ class HomeScreen extends StatelessWidget {
                 Text(
                   'iOS · Android · Flutter',
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.jetBrainsMono(
+                  style: zuniaMono(
                     fontSize: 11,
                     color: ZuniaColors.grey,
                   ),

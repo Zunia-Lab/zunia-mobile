@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:zunia_mobile/theme/zunia_theme.dart';
 
 class ZuniaSurface extends StatelessWidget {
@@ -13,8 +12,8 @@ class ZuniaSurface extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: ZuniaColors.elevatedDark,
-        borderRadius: BorderRadius.circular(14),
+        color: ZuniaThemeTokens.darkElevated,
+        borderRadius: BorderRadius.circular(ZuniaRadii.lg),
         border: Border.all(color: const Color(0x1FF4F5F7)),
       ),
       child: child,
@@ -31,7 +30,7 @@ class ZuniaLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: GoogleFonts.spaceGrotesk(
+      style: zuniaSans(
         fontSize: 12,
         fontWeight: FontWeight.w500,
         color: ZuniaColors.muted,
@@ -53,7 +52,7 @@ class ZuniaAmount extends StatelessWidget {
         children: [
           TextSpan(
             text: value,
-            style: GoogleFonts.jetBrainsMono(
+            style: zuniaMono(
               fontSize: 22,
               fontWeight: FontWeight.w500,
               color: ZuniaColors.paper,
@@ -62,7 +61,7 @@ class ZuniaAmount extends StatelessWidget {
           if (denom != null)
             TextSpan(
               text: ' $denom',
-              style: GoogleFonts.jetBrainsMono(
+              style: zuniaMono(
                 fontSize: 14,
                 color: ZuniaColors.muted,
               ),
@@ -88,7 +87,7 @@ class ZuniaAddress extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       _truncated,
-      style: GoogleFonts.jetBrainsMono(
+      style: zuniaMono(
         fontSize: 12,
         color: ZuniaColors.muted,
       ),

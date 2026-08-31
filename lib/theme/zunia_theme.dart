@@ -1,20 +1,41 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:zunia_tokens/zunia_tokens.dart';
 
-/// Brand tokens aligned with zunia-brand / @zunialab/tokens.
-abstract final class ZuniaColors {
-  static const ink = Color(0xFF10214F);
-  static const paper = Color(0xFFF4F5F7);
-  static const cobalt = Color(0xFF2050C4);
-  static const cobaltBright = Color(0xFF3B6BFF);
-  static const cobaltSoft = Color(0xFF6FA8FF);
-  static const black = Color(0xFF101012);
-  static const slate = Color(0xFF4A5468);
-  static const grey = Color(0xFF6E7280);
-  static const muted = Color(0xFFA8BADE);
-  static const hairline = Color(0xFFC7D2EA);
-  static const wash = Color(0xFFE4E9F4);
-  static const elevatedDark = Color(0xFF15275C);
+export 'package:zunia_tokens/zunia_tokens.dart'
+    show ZuniaColors, ZuniaSpace, ZuniaRadii, ZuniaThemeTokens;
+
+/// Locally bundled fonts — never fetch at runtime (privacy + offline).
+const String kZuniaSans = 'SpaceGrotesk';
+const String kZuniaMono = 'JetBrainsMono';
+
+TextStyle zuniaSans({
+  double? fontSize,
+  FontWeight? fontWeight,
+  double? letterSpacing,
+  double? height,
+  Color? color,
+}) {
+  return TextStyle(
+    fontFamily: kZuniaSans,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    letterSpacing: letterSpacing,
+    height: height,
+    color: color,
+  );
+}
+
+TextStyle zuniaMono({
+  double? fontSize,
+  FontWeight? fontWeight,
+  Color? color,
+}) {
+  return TextStyle(
+    fontFamily: kZuniaMono,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+  );
 }
 
 abstract final class ZuniaTheme {
@@ -22,29 +43,31 @@ abstract final class ZuniaTheme {
     final base = ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      fontFamily: kZuniaSans,
       scaffoldBackgroundColor: ZuniaColors.ink,
       colorScheme: const ColorScheme.dark(
         primary: ZuniaColors.cobalt,
         onPrimary: Colors.white,
         secondary: ZuniaColors.cobaltSoft,
-        surface: ZuniaColors.elevatedDark,
+        surface: ZuniaThemeTokens.darkElevated,
         onSurface: ZuniaColors.paper,
         outline: Color(0x1FF4F5F7),
       ),
     );
 
     return base.copyWith(
-      textTheme: GoogleFonts.spaceGroteskTextTheme(base.textTheme).apply(
+      textTheme: base.textTheme.apply(
+        fontFamily: kZuniaSans,
         bodyColor: ZuniaColors.paper,
         displayColor: ZuniaColors.paper,
       ),
-      primaryTextTheme: GoogleFonts.spaceGroteskTextTheme(base.primaryTextTheme),
+      primaryTextTheme: base.primaryTextTheme.apply(fontFamily: kZuniaSans),
       appBarTheme: AppBarTheme(
         backgroundColor: ZuniaColors.ink,
         foregroundColor: ZuniaColors.paper,
         elevation: 0,
         centerTitle: false,
-        titleTextStyle: GoogleFonts.spaceGrotesk(
+        titleTextStyle: zuniaSans(
           fontSize: 20,
           fontWeight: FontWeight.w500,
           letterSpacing: -0.6,
@@ -57,7 +80,7 @@ abstract final class ZuniaTheme {
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           shape: const StadiumBorder(),
-          textStyle: GoogleFonts.spaceGrotesk(
+          textStyle: zuniaSans(
             fontWeight: FontWeight.w500,
             fontSize: 14,
             letterSpacing: -0.3,
@@ -73,10 +96,10 @@ abstract final class ZuniaTheme {
         ),
       ),
       cardTheme: CardThemeData(
-        color: ZuniaColors.elevatedDark,
+        color: ZuniaThemeTokens.darkElevated,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(ZuniaRadii.lg),
           side: const BorderSide(color: Color(0x1FF4F5F7)),
         ),
       ),
@@ -87,6 +110,7 @@ abstract final class ZuniaTheme {
     final base = ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
+      fontFamily: kZuniaSans,
       scaffoldBackgroundColor: ZuniaColors.paper,
       colorScheme: const ColorScheme.light(
         primary: ZuniaColors.cobalt,
@@ -99,7 +123,8 @@ abstract final class ZuniaTheme {
     );
 
     return base.copyWith(
-      textTheme: GoogleFonts.spaceGroteskTextTheme(base.textTheme).apply(
+      textTheme: base.textTheme.apply(
+        fontFamily: kZuniaSans,
         bodyColor: ZuniaColors.black,
         displayColor: ZuniaColors.ink,
       ),
