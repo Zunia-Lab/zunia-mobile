@@ -1,0 +1,46 @@
+# Mnemonic / key UX security policy (config only — enforce in UI later)
+
+schema_version: 1
+
+screenshots:
+  android_flag_secure: true
+  ios_detect_screen_capture: true
+  ios_blur_on_screenshot_notification: true
+  extension_cannot_block: true
+
+display:
+  blur_by_default: true
+  hold_to_reveal: true
+  auto_reblur_on_background: true
+  auto_hide_after_seconds: 60
+  hide_in_app_switcher: true
+
+clipboard:
+  allow_mnemonic_copy_default: false
+  if_allowed_auto_clear_seconds: 45
+  warn_before_copy: true
+
+input:
+  autocomplete: off
+  autocorrect: false
+  spellcheck: false
+  disable_third_party_keyboards_when_possible: true
+  android_ime_no_personalized_learning: true
+
+backup_verification:
+  required_before_fund: true
+  random_word_positions: 4
+  typed_entry: true
+  skip_allowed_with_scary_confirm: true
+  persistent_unverified_banner: true
+
+logging:
+  never_log_mnemonic: true
+  scrub_crash_reporters: true
+  strip_devtools_in_release: true
+
+entropy:
+  source: platform_csprng_only
+  forbid_math_random: true
+  offer_24_word: true
+  min_bits: 128

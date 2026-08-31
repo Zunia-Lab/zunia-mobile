@@ -16,6 +16,25 @@ Non-custodial multi-chain Cosmos wallet. Targets:
 
 Chain metadata comes from [zunia-chain-registry](https://github.com/Zunia-Lab/zunia-chain-registry). Visual tokens follow [zunia-brand](https://github.com/Zunia-Lab/zunia-brand) / [zunia-ui](https://github.com/Zunia-Lab/zunia-ui).
 
+## Secure connect (config only)
+
+Deep links, App / Universal Links, and WalletConnect v2 **settings** are ready; session code is not wired yet.
+
+| Item | Location |
+|------|----------|
+| Canonical YAML | `config/connect.yaml` |
+| Dart constants | `lib/config/connect_config.dart` |
+| Env template | `.env.example` |
+| Android intents + HTTPS-only | `android/.../AndroidManifest.xml`, `network_security_config.xml` |
+| iOS URL schemes + ATS | `ios/Runner/Info.plist` |
+| Associated domains | `ios/Runner/Runner.entitlements` |
+
+```bash
+cp .env.example .env
+# set WALLETCONNECT_PROJECT_ID from https://cloud.walletconnect.com
+flutter run --dart-define=WALLETCONNECT_PROJECT_ID=$WALLETCONNECT_PROJECT_ID
+```
+
 ## Status
 
 In development (alpha). Not on App Store / Play Store yet.
@@ -31,6 +50,7 @@ In development (alpha). Not on App Store / Play Store yet.
 | [zunia-website](https://github.com/Zunia-Lab/zunia-website) | Marketing site |
 | [zunia-brand](https://github.com/Zunia-Lab/zunia-brand) | Brand assets |
 | [zunia-ui](https://github.com/Zunia-Lab/zunia-ui) | Shared design tokens / web UI |
+| [zunia-sdk](https://github.com/Zunia-Lab/zunia-sdk) | Developer SDKs (web / Flutter) |
 
 ## Requirements
 

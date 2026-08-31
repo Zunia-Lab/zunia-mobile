@@ -1,0 +1,74 @@
+# Zunia mobile — secure connection config (placeholders only; no runtime wiring yet)
+# Fill secrets via --dart-define or a local .env (never commit real project IDs to public forks if rotated)
+
+schema_version: 1
+
+wallet:
+  name: Zunia
+  short_name: Zunia
+  description: Multi-chain Cosmos wallet
+  url: https://zuniawallet.com
+  icons:
+    - https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/v1.0.0/assets/icon/icon-512.png
+
+# WalletConnect Cloud project: https://cloud.walletconnect.com
+walletconnect:
+  version: 2
+  # Replace before shipping. Use the same project ID across mobile + dashboard.
+  project_id: ${WALLETCONNECT_PROJECT_ID}
+  relay_url: wss://relay.walletconnect.com
+  # CosmJS / Cosmos namespaces commonly used by dApps
+  namespaces:
+    cosmos:
+      methods:
+        - cosmos_getAccounts
+        - cosmos_signAmino
+        - cosmos_signDirect
+        - cosmos_signArbitrary
+      events:
+        - accountsChanged
+        - chainChanged
+      # Empty = allow any chain the wallet enables; tighten in production if needed
+      chains: []
+  session:
+    require_user_approval: true
+    expire_on_disconnect: true
+    max_pending_requests: 5
+
+deep_links:
+  # Custom scheme (always available; less secure than verified App / Universal Links)
+  custom_schemes:
+    - scheme: zunia
+      hosts:
+        - wc
+        - connect
+        - dapp
+    - scheme: zuniamobile
+      hosts:
+        - wc
+  # WalletConnect URI scheme (dApps open wc:... links)
+  walletconnect_scheme: wc
+  # Verified HTTPS links (require AASA + assetlinks on the website)
+  universal_links:
+    - https://zuniawallet.com/wc
+    - https://zuniawallet.com/connect
+    - https://link.zuniawallet.com/wc
+    - https://link.zuniawallet.com/connect
+
+security:
+  # Only HTTPS for chain RPC / indexer / WC relay (localhost allowed in debug)
+  cleartext_traffic: false
+  allow_localhost_in_debug: true
+  # Always show human-readable preview before signing
+  require_tx_preview: true
+  # Per-origin allowlist is empty until first user approval
+  default_origin_policy: prompt
+  # Reject sessions that request methods outside namespaces above
+  strict_namespace: true
+
+app_ids:
+  android_application_id: com.zuniawallet.zunia_mobile
+  ios_bundle_id: com.zuniawallet.zuniaMobile
+  # Fill after Play App Signing / Apple Team setup (used in Digital Asset Links / AASA)
+  android_sha256_cert_fingerprints: []
+  apple_team_id: "" # e.g. ABCDE12345 — required for apple-app-site-association appID
