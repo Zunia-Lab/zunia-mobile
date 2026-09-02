@@ -1,5 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
         android:label="Zunia"
@@ -51,7 +55,19 @@
                 <data android:scheme="wc"/>
             </intent-filter>
 
-            <!-- Verified App Links (requires assetlinks.json on the domain) -->
+            <!--
+              Verified App Links (Digital Asset Links).
+              Host https://zuniawallet.com/.well-known/assetlinks.json with:
+              [{
+                "relation": ["delegate_permission/common.handle_all_urls"],
+                "target": {
+                  "namespace": "android_app",
+                  "package_name": "com.zuniawallet.zunia_mobile",
+                  "sha256_cert_fingerprints": ["<PLAY_APP_SIGNING_CERT>"]
+                }
+              }]
+              Fill fingerprints in config/connect.yaml once Play App Signing is set.
+            -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>

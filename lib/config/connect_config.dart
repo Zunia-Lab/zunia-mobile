@@ -1,7 +1,7 @@
 /// Secure connect / dApp session configuration.
 ///
-/// Values mirror [config/connect.yaml]. No WalletConnect or deep-link
-/// handlers are wired yet — this is the contract for a future implementation.
+/// Values mirror [config/connect.yaml]. Deep-link registration lives in
+/// [DeepLinkHandler]; WalletConnect uses [WalletConnectService].
 library;
 
 /// WalletConnect Cloud project id from `--dart-define=WALLETCONNECT_PROJECT_ID=...`
@@ -15,7 +15,7 @@ const String kWalletConnectRelayUrl = 'wss://relay.walletconnect.com';
 const String kWalletName = 'Zunia';
 const String kWalletUrl = 'https://zuniawallet.com';
 const String kWalletIconUrl =
-    'https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/v1.0.0/assets/icon/icon-512.png';
+    'https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/main/png/icons/app/zunia-icon-512.png';
 
 const String kAndroidApplicationId = 'com.zuniawallet.zunia_mobile';
 const String kIosBundleId = 'com.zuniawallet.zuniaMobile';

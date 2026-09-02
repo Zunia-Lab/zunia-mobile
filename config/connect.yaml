@@ -9,7 +9,7 @@ wallet:
   description: Multi-chain Cosmos wallet
   url: https://zuniawallet.com
   icons:
-    - https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/v1.0.0/assets/icon/icon-512.png
+    - https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/main/png/icons/app/zunia-icon-512.png
 
 # WalletConnect Cloud project: https://cloud.walletconnect.com
 walletconnect:

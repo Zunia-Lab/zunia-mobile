@@ -13,6 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Optional: when repo variable ZUNIA_CORE_TAG is set (e.g. v0.1.0), download
+      # public GitHub Release natives. No secrets required for public releases.
+      - name: Fetch native FFI (optional)
+        env:
+          ZUNIA_CORE_TAG: ${{ vars.ZUNIA_CORE_TAG }}
+        run: |
+          if [[ -z "${ZUNIA_CORE_TAG}" ]]; then
+            echo "ZUNIA_CORE_TAG not set; skipping fetch-native"
+            exit 0
+          fi
+          ./scripts/fetch-native.sh
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable

@@ -1,0 +1,41 @@
+name: Bump zunia_core natives
+
+on:
+  repository_dispatch:
+    types: [zunia-core-released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.1.0)
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin core tag
+        env:
+          TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+        run: |
+          set -euo pipefail
+          test -n "${TAG:-}"
+          mkdir -p config
+          echo "ZUNIA_CORE_TAG=${TAG}" > config/core_native.env
+          git config user.name "zunia-release-bot"
+          git config user.email "release@zuniawallet.com"
+          branch="deps/zunia-core-${TAG}"
+          git checkout -b "$branch"
+          git add config/core_native.env
+          git commit -m "chore: pin zunia-core native artifacts to ${TAG}" || echo "no changes"
+          git push -u origin "$branch"
+          gh pr create \
+            --title "chore: pin zunia-core natives to ${TAG}" \
+            --body "Opened by the zunia-core release dispatch. Run scripts/fetch-native.sh after merge. Crypto bumps are never auto-merged." \
+            --base main || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

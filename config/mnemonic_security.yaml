@@ -10,15 +10,15 @@ screenshots:
 
 display:
   blur_by_default: true
-  hold_to_reveal: true
+  tap_to_reveal: true
   auto_reblur_on_background: true
   auto_hide_after_seconds: 60
   hide_in_app_switcher: true
 
 clipboard:
-  allow_mnemonic_copy_default: false
+  allow_mnemonic_copy_default: true
   if_allowed_auto_clear_seconds: 45
-  warn_before_copy: true
+  warn_before_copy: false
 
 input:
   autocomplete: off
@@ -29,9 +29,10 @@ input:
 
 backup_verification:
   required_before_fund: true
-  random_word_positions: 4
-  typed_entry: true
-  skip_allowed_with_scary_confirm: true
+  random_word_positions_12: 4
+  random_word_positions_24: 6
+  typed_entry: false
+  skip_allowed_with_scary_confirm: false
   persistent_unverified_banner: true
 
 logging:

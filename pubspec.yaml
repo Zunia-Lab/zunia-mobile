@@ -12,6 +12,37 @@ dependencies:
   cupertino_icons: ^1.0.8
   zunia_tokens:
     path: ../zunia-ui/packages/tokens-flutter
+  zunia_ui:
+    path: ../zunia-ui/packages/ui-flutter
+  # Kernel FFI bindings; native .so / xcframework come from scripts/fetch-native.sh
+  zunia_core:
+    path: ../zunia-core/packages/dart
+
+  flutter_secure_storage: ^9.2.4
+  local_auth: ^2.3.0
+  mobile_scanner: ^7.0.0
+  flutter_riverpod: ^2.6.1
+  shared_preferences: ^2.5.3
+  # uni_links is discontinued; app_links is the maintained replacement
+  app_links: ^6.4.0
+  path_provider: ^2.1.5
+  crypto: ^3.0.6
+
+  # WalletConnect v2 via Reown WalletKit
+  reown_walletkit: ^1.3.0
+  url_launcher: ^6.3.1
+  # Offline QR rendering; nothing about an address should leave the device
+  qr: ^3.0.2
+  bip39: ^1.0.6
+  bip32: ^2.0.0
+  bech32: ^0.2.2
+  pointycastle: ^3.9.1
+
+  # Push notifications (Firebase Cloud Messaging):
+  # Uncomment when a Firebase project is linked and google-services / GoogleService-Info
+  # are present. Until then, use lib/services/push_messaging.dart stub.
+  # firebase_core: ^3.0.0
+  # firebase_messaging: ^15.0.0
 
 dev_dependencies:
   flutter_test:
@@ -23,6 +54,9 @@ flutter:
   assets:
     - assets/brand/icon.png
     - assets/brand/icon-512.png
+    - assets/chains/catalog.json
+    - config/mnemonic_security.yaml
+    - config/connect.yaml
   fonts:
     - family: SpaceGrotesk
       fonts:

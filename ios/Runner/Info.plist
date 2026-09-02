@@ -56,6 +56,10 @@
 		<string>http</string>
 		<string>wc</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Zunia uses the camera to scan WalletConnect and payment QR codes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Zunia uses Face ID to unlock your wallet after you enter your password.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

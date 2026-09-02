@@ -2,6 +2,13 @@
 .env
 .env.local
 
+# Native FFI artifacts (fetched via scripts/fetch-native.sh)
+android/app/src/main/jniLibs/**
+!android/app/src/main/jniLibs/.gitkeep
+ios/Frameworks/**
+!ios/Frameworks/.gitkeep
+.zunia-core-native-tag
+
 # Miscellaneous
 *.class
 *.log
@@ -22,11 +29,6 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
 # Flutter/Dart/Pub related
 **/doc/api/
 **/ios/Flutter/.last_build_id
@@ -46,4 +48,3 @@ app.*.map.json
 .idea/
 *.iml
 /build/
-
