@@ -1,5 +1,5 @@
-# Zunia mobile — secure connection config (placeholders only; no runtime wiring yet)
-# Fill secrets via --dart-define or a local .env (never commit real project IDs to public forks if rotated)
+# Zunia mobile — secure connection config
+# Secrets via --dart-define or local env (never commit real project IDs to public forks if rotated)
 
 schema_version: 1
 
@@ -7,9 +7,20 @@ wallet:
   name: Zunia
   short_name: Zunia
   description: Multi-chain Cosmos wallet
-  url: https://zuniawallet.com
+  url: https://zunialab.com
   icons:
     - https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/main/png/icons/app/zunia-icon-512.png
+
+# First-party Zunia native WebSocket connect (zunia.connect.v1)
+# Override at build time: --dart-define=CONNECT_WS_PUBLIC_URL=... --dart-define=ZUNIA_CONNECT_API_BASE=...
+native_ws:
+  protocol_version: zunia.connect.v1
+  ws_public_url: ${CONNECT_WS_PUBLIC_URL:-ws://localhost:8788}
+  api_base: ${ZUNIA_CONNECT_API_BASE:-}
+  ws_path: /v1/connect/ws
+  http_path: /v1/connect/sessions
+  paired_ttl_seconds: 86400
+  deep_link: zunia://connect
 
 # WalletConnect Cloud project: https://cloud.walletconnect.com
 walletconnect:
@@ -50,10 +61,10 @@ deep_links:
   walletconnect_scheme: wc
   # Verified HTTPS links (require AASA + assetlinks on the website)
   universal_links:
-    - https://zuniawallet.com/wc
-    - https://zuniawallet.com/connect
-    - https://link.zuniawallet.com/wc
-    - https://link.zuniawallet.com/connect
+    - https://zunialab.com/wc
+    - https://zunialab.com/connect
+    - https://link.zunialab.com/wc
+    - https://link.zunialab.com/connect
 
 security:
   # Only HTTPS for chain RPC / indexer / WC relay (localhost allowed in debug)

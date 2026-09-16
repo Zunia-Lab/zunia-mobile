@@ -57,7 +57,7 @@
 
             <!--
               Verified App Links (Digital Asset Links).
-              Host https://zuniawallet.com/.well-known/assetlinks.json with:
+              Host https://zunialab.com/.well-known/assetlinks.json with:
               [{
                 "relation": ["delegate_permission/common.handle_all_urls"],
                 "target": {
@@ -72,10 +72,10 @@
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="https" android:host="zuniawallet.com" android:pathPrefix="/wc"/>
-                <data android:scheme="https" android:host="zuniawallet.com" android:pathPrefix="/connect"/>
-                <data android:scheme="https" android:host="link.zuniawallet.com" android:pathPrefix="/wc"/>
-                <data android:scheme="https" android:host="link.zuniawallet.com" android:pathPrefix="/connect"/>
+                <data android:scheme="https" android:host="zunialab.com" android:pathPrefix="/wc"/>
+                <data android:scheme="https" android:host="zunialab.com" android:pathPrefix="/connect"/>
+                <data android:scheme="https" android:host="link.zunialab.com" android:pathPrefix="/wc"/>
+                <data android:scheme="https" android:host="link.zunialab.com" android:pathPrefix="/connect"/>
             </intent-filter>
         </activity>
         <meta-data

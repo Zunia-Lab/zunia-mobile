@@ -27,7 +27,7 @@ jobs:
           mkdir -p config
           echo "ZUNIA_CORE_TAG=${TAG}" > config/core_native.env
           git config user.name "zunia-release-bot"
-          git config user.email "release@zuniawallet.com"
+          git config user.email "release@zunialab.com"
           branch="deps/zunia-core-${TAG}"
           git checkout -b "$branch"
           git add config/core_native.env
