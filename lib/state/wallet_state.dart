@@ -85,17 +85,26 @@ const _kChains = 'zunia.wallet.enabledChains';
 
 class WalletController extends StateNotifier<WalletData> {
   WalletController() : super(const WalletData()) {
-    _restore();
+    _ready = _restore();
   }
 
+  /// Completes after the first disk restore finishes (or is superseded by a write).
+  late final Future<void> _ready;
+
+  /// Bumped on every successful write so a late restore cannot clobber newer state.
+  int _generation = 0;
+
   Future<void> _restore() async {
+    final started = _generation;
     final store = await SharedPreferences.getInstance();
+    if (started != _generation) return;
     final rawAccounts = store.getString(_kAccounts);
     final accounts = rawAccounts == null
         ? <WalletAccount>[]
         : (jsonDecode(rawAccounts) as List<dynamic>)
             .map((e) => WalletAccount.fromJson(e as Map<String, dynamic>))
             .toList();
+    if (started != _generation) return;
     state = WalletData(
       accounts: accounts,
       activeId: store.getString(_kActive),
@@ -106,13 +115,19 @@ class WalletController extends StateNotifier<WalletData> {
   }
 
   Future<void> _persist(WalletData next) async {
-    state = next;
+    await _ready;
+    _generation++;
+    state = next.copyWith(loaded: true);
     final store = await SharedPreferences.getInstance();
     await store.setString(
       _kAccounts,
       jsonEncode(next.accounts.map((a) => a.toJson()).toList()),
     );
-    if (next.activeId != null) await store.setString(_kActive, next.activeId!);
+    if (next.activeId != null) {
+      await store.setString(_kActive, next.activeId!);
+    } else {
+      await store.remove(_kActive);
+    }
     await store.setStringList(_kChains, next.enabledChainIds);
   }
 
@@ -132,6 +147,23 @@ class WalletController extends StateNotifier<WalletData> {
         activeId: account.id,
         enabledChainIds:
             enabledChainIds.isEmpty ? const ['safrochain-1'] : enabledChainIds,
+        loaded: true,
+      ),
+    );
+  }
+
+  /// Repairs a vault that lost its account metadata (e.g. restore race wipe).
+  Future<void> ensureDefaultAccount({String name = 'Main'}) async {
+    await _ready;
+    if (state.accounts.isNotEmpty) return;
+    final account = WalletAccount(id: 'acct-0', name: name, index: 0);
+    await _persist(
+      state.copyWith(
+        accounts: [account],
+        activeId: account.id,
+        enabledChainIds: state.enabledChainIds.isEmpty
+            ? const ['safrochain-1']
+            : state.enabledChainIds,
         loaded: true,
       ),
     );

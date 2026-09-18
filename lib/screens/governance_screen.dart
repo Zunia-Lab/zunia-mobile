@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/crypto/amino_tx.dart';
 import 'package:zunia_mobile/services/chain_client.dart';
+import 'package:zunia_mobile/services/wallet_tx_service.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/widgets/chain_picker.dart';
+import 'package:zunia_mobile/widgets/transfer_sent_sheet.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// Proposals for one chain, open votes first.
@@ -136,16 +139,16 @@ class _GovernanceScreenState extends ConsumerState<GovernanceScreen> {
   }
 }
 
-class _ProposalCard extends StatefulWidget {
+class _ProposalCard extends ConsumerStatefulWidget {
   const _ProposalCard({required this.proposal});
 
   final ProposalInfo proposal;
 
   @override
-  State<_ProposalCard> createState() => _ProposalCardState();
+  ConsumerState<_ProposalCard> createState() => _ProposalCardState();
 }
 
-class _ProposalCardState extends State<_ProposalCard> {
+class _ProposalCardState extends ConsumerState<_ProposalCard> {
   String? _vote;
 
   static String _label(ProposalStatus status) {
@@ -171,6 +174,7 @@ class _ProposalCardState extends State<_ProposalCard> {
     final proposal = widget.proposal;
     final voting = proposal.status == ProposalStatus.voting;
     final tally = proposal.tally;
+    final accounts = ref.watch(chainAccountsProvider);
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -335,19 +339,55 @@ class _ProposalCardState extends State<_ProposalCard> {
                 size: ZuniaButtonSize.lg,
                 onPressed: _vote == null
                     ? null
-                    : () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Voting needs a signing endpoint. Nothing left the device.',
+                    : () async {
+                        final phrase = ref.read(phraseProvider);
+                        final wallet = ref.read(walletProvider);
+                        final active = wallet.active;
+                        final chainAccount = accounts
+                            .where((a) => a.chain.chainId == proposal.chainId)
+                            .firstOrNull;
+                        if (phrase == null ||
+                            active == null ||
+                            chainAccount == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Unlock the wallet to sign.'),
                             ),
-                          ),
-                        );
+                          );
+                          return;
+                        }
+                        try {
+                          final hash =
+                              await WalletTxService.instance.signAndBroadcast(
+                            phrase: phrase,
+                            chain: chainAccount.chain,
+                            signerAddress: chainAccount.address,
+                            accountIndex: active.index,
+                            msgs: [
+                              msgVote(
+                                proposalId: proposal.id,
+                                voter: chainAccount.address,
+                                option: _vote!,
+                              ),
+                            ],
+                          );
+                          if (!context.mounted) return;
+                          await showTransferSent(
+                            context,
+                            txHash: hash,
+                            title: 'Vote broadcast',
+                          );
+                        } catch (err) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('$err')),
+                          );
+                        }
                       },
               ),
               const SizedBox(height: 8),
               Text(
-                'Voting needs a signing endpoint; reads are enabled, writes are not.',
+                'Signs MsgVote on this device and posts to the chain REST endpoint.',
                 style: zuniaMono(fontSize: 9, height: 1.5, color: s.fgDim),
               ),
             ],

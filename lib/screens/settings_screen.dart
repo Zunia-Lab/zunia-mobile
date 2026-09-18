@@ -6,6 +6,7 @@ import 'package:zunia_mobile/screens/address_book_screen.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/preferences_screen.dart';
 import 'package:zunia_mobile/screens/security_screen.dart';
+import 'package:zunia_mobile/screens/sessions_screen.dart';
 import 'package:zunia_mobile/screens/wallets_screen.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
@@ -26,11 +27,15 @@ class SettingsScreen extends ConsumerWidget {
     final s = ZuniaSemanticsExt.of(context);
     final wallet = ref.watch(walletProvider);
     final wc = ref.watch(walletConnectProvider);
+    final native = ref.watch(nativeConnectProvider);
     final verified = ref.watch(backupVerifiedProvider);
+    final sessionCount =
+        wc.activeSessions.length + native.activeSessions.length;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Settings & security',
           onBack: () => Navigator.of(context).pop(),
@@ -95,6 +100,16 @@ class SettingsScreen extends ConsumerWidget {
                 label: 'Connections',
                 children: [
                   SettingsRow(
+                    title: 'Connected apps',
+                    description: sessionCount == 0
+                        ? 'No active sessions'
+                        : '$sessionCount session'
+                            '${sessionCount == 1 ? '' : 's'}',
+                    leading: const Icon(Icons.devices_other_outlined),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _open(context, const SessionsScreen()),
+                  ),
+                  SettingsRow(
                     title: 'WalletConnect',
                     description: wc.isReady
                         ? 'Ready · $kWalletName'
@@ -107,6 +122,20 @@ class SettingsScreen extends ConsumerWidget {
                       style: zuniaMono(
                         fontSize: 10.5,
                         color: wc.isReady ? s.info : s.fgMuted,
+                      ),
+                    ),
+                  ),
+                  SettingsRow(
+                    title: 'Zunia Connect',
+                    description: native.isConnected
+                        ? 'Wallet peer connected'
+                        : 'WS ${kConnectWsPublicUrl.replaceFirst(RegExp(r'^wss?://'), '')}',
+                    leading: const Icon(Icons.wifi_tethering),
+                    trailing: Text(
+                      native.isConnected ? 'live' : 'idle',
+                      style: zuniaMono(
+                        fontSize: 10.5,
+                        color: native.isConnected ? s.info : s.fgMuted,
                       ),
                     ),
                   ),

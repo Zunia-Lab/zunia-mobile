@@ -1,16 +1,34 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/crypto/keystore.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
+import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/wallet_connect_service.dart';
 
 final keystoreProvider = Provider<Keystore>((ref) => Keystore());
 
-final walletConnectProvider = Provider<WalletConnectService>(
-  (ref) => createWalletConnectService(),
-);
+final walletConnectProvider = Provider<WalletConnectService>((ref) {
+  final service = createWalletConnectService();
+  ref.onDispose(() {
+    unawaited(service.dispose());
+  });
+  return service;
+});
+
+final nativeConnectProvider = Provider<NativeConnectService>((ref) {
+  final service = NativeConnectService();
+  ref.onDispose(() {
+    unawaited(service.dispose());
+  });
+  return service;
+});
 
 final deepLinkHandlerProvider = Provider<DeepLinkHandler>((ref) {
-  return DeepLinkHandler(walletConnect: ref.watch(walletConnectProvider));
+  return DeepLinkHandler(
+    walletConnect: ref.watch(walletConnectProvider),
+    nativeConnect: ref.watch(nativeConnectProvider),
+  );
 });
 
 enum AppGate { loading, onboarding, unlock, ready }

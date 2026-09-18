@@ -37,6 +37,7 @@ dependencies:
   bip32: ^2.0.0
   bech32: ^0.2.2
   pointycastle: ^3.9.1
+  flutter_inappwebview: ^6.1.5
 
   # Push notifications (Firebase Cloud Messaging):
   # Uncomment when a Firebase project is linked and google-services / GoogleService-Info
@@ -54,6 +55,8 @@ flutter:
   assets:
     - assets/brand/icon.png
     - assets/brand/icon-512.png
+    - assets/brand/splash-mark.png
+    - assets/brand/splash-lockup.png
     - assets/chains/catalog.json
     - config/mnemonic_security.yaml
     - config/connect.yaml

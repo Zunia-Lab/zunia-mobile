@@ -12,8 +12,81 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 
-const _timeout = Duration(seconds: 9);
+const _defaultTimeout = Duration(seconds: 9);
 
+/// Why a read produced no number.
+///
+/// This is a reason, never an amount. A failed read used to fall through to
+/// '0', and the send screen reported that as the user's balance: one
+/// rate-limited refresh told a funded wallet it held nothing and blocked every
+/// send until the endpoint recovered. "Not read" and "read as zero" are
+/// different facts and have to stay different values.
+enum ChainReadFailureKind {
+  /// The wallet is not allowed to talk to endpoints at all.
+  readsDisabled,
+
+  /// No REST endpoint is configured for this chain.
+  noEndpoint,
+
+  /// DNS, TLS or socket failure: the endpoint was never reached.
+  unreachable,
+
+  /// The connection was made but no answer arrived inside the budget.
+  timedOut,
+
+  /// A non-200 answer: rate limit, gateway error, chain behind a proxy.
+  badStatus,
+
+  /// A 200 whose body is not the LCD schema this call expects.
+  malformedBody,
+
+  /// One page of a longer list came back and the denom was not on it, so it
+  /// cannot be ruled out from what was read.
+  incompletePage,
+}
+
+@immutable
+class ChainReadFailure {
+  const ChainReadFailure(this.kind, {this.statusCode, this.detail});
+
+  final ChainReadFailureKind kind;
+
+  /// Set for [ChainReadFailureKind.badStatus].
+  final int? statusCode;
+
+  /// Raw context (socket error, parser message). Diagnostic, not user copy.
+  final String? detail;
+
+  /// One sentence naming the cause. Short enough to sit next to a disabled
+  /// control, and it never implies anything about what the account holds.
+  String get message => switch (kind) {
+        ChainReadFailureKind.readsDisabled =>
+          'Live reads are off, so the wallet has not asked any endpoint for '
+              'this balance.',
+        ChainReadFailureKind.noEndpoint =>
+          'This network has no REST endpoint configured, so there is nothing '
+              'to ask.',
+        ChainReadFailureKind.unreachable =>
+          'The network endpoint could not be reached.',
+        ChainReadFailureKind.timedOut =>
+          'The network endpoint did not answer in time.',
+        ChainReadFailureKind.badStatus =>
+          'The network endpoint answered HTTP ${statusCode ?? 0}.',
+        ChainReadFailureKind.malformedBody =>
+          'The network endpoint answered with something that is not a '
+              'balance.',
+        ChainReadFailureKind.incompletePage =>
+          'The network endpoint returned only part of this account, so this '
+              'denomination cannot be ruled out.',
+      };
+}
+
+/// A balance that was actually read.
+///
+/// There is deliberately no `empty` instance and no failure case on this type:
+/// a [ChainBalance] exists only when the endpoint answered, so every number on
+/// it is a fact about the account. A read that failed is a
+/// [BalanceUnavailable], never a ChainBalance full of zeros.
 @immutable
 class ChainBalance {
   const ChainBalance({
@@ -21,6 +94,7 @@ class ChainBalance {
     required this.available,
     required this.staked,
     required this.rewards,
+    this.otherDenoms = const [],
   });
 
   final String chainId;
@@ -30,12 +104,40 @@ class ChainBalance {
   final String staked;
   final String rewards;
 
-  static const empty = ChainBalance(
-    chainId: '',
-    available: '0',
-    staked: '0',
-    rewards: '0',
-  );
+  /// Denominations the account holds that are not the chain entry's
+  /// coinMinimalDenom. Present so a screen can say "no ATOM here, but three
+  /// other denominations" when [available] is a genuine zero that most likely
+  /// means the chain entry names the wrong denom, instead of implying the
+  /// account is empty.
+  final List<String> otherDenoms;
+}
+
+/// Outcome of one balance read: a value, or the reason there is none.
+@immutable
+sealed class BalanceRead {
+  const BalanceRead();
+}
+
+final class BalanceLoaded extends BalanceRead {
+  const BalanceLoaded(this.balance);
+
+  final ChainBalance balance;
+}
+
+final class BalanceUnavailable extends BalanceRead {
+  const BalanceUnavailable(this.failure);
+
+  final ChainReadFailure failure;
+}
+
+/// One HTTP read: a decoded body, or the reason there is none.
+@immutable
+class _JsonRead {
+  const _JsonRead.ok(Map<String, dynamic> this.json) : failure = null;
+  const _JsonRead.failed(ChainReadFailure this.failure) : json = null;
+
+  final Map<String, dynamic>? json;
+  final ChainReadFailure? failure;
 }
 
 @immutable
@@ -142,12 +244,19 @@ class ActivityItem {
 }
 
 class ChainClient {
-  ChainClient({required this.enabled});
+  ChainClient({required this.enabled, this.timeout = _defaultTimeout})
+      : _http = HttpClient() {
+    _http.connectionTimeout = timeout;
+  }
 
   /// Mirrors the `liveReads` preference.
   final bool enabled;
 
-  final HttpClient _http = HttpClient()..connectionTimeout = _timeout;
+  /// Budget for each leg of a request. Tests shorten it so a hung endpoint
+  /// does not cost nine seconds; nothing else should touch it.
+  final Duration timeout;
+
+  final HttpClient _http;
 
   static String? _restOf(ChainEntry chain) {
     final rest = chain.rest;
@@ -155,19 +264,87 @@ class ChainClient {
     return rest.endsWith('/') ? rest.substring(0, rest.length - 1) : rest;
   }
 
-  Future<Map<String, dynamic>?> _getJson(String url) async {
-    if (!enabled) return null;
-    try {
-      final request = await _http.getUrl(Uri.parse(url)).timeout(_timeout);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final response = await request.close().timeout(_timeout);
-      if (response.statusCode != 200) return null;
-      final body = await response.transform(utf8.decoder).join();
-      final decoded = jsonDecode(body);
-      return decoded is Map<String, dynamic> ? decoded : null;
-    } catch (_) {
-      return null;
+  Future<_JsonRead> _readJson(String url) async {
+    if (!enabled) {
+      return const _JsonRead.failed(
+        ChainReadFailure(ChainReadFailureKind.readsDisabled),
+      );
     }
+    final uri = Uri.tryParse(url);
+    if (uri == null) {
+      return _JsonRead.failed(
+        ChainReadFailure(ChainReadFailureKind.noEndpoint, detail: url),
+      );
+    }
+    try {
+      final request = await _http.getUrl(uri).timeout(timeout);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode != 200) {
+        try {
+          // Release the socket. The status is the answer either way.
+          await response.drain<void>().timeout(timeout);
+        } on Exception {
+          // A body we could not read does not change the status we got.
+        }
+        return _JsonRead.failed(
+          ChainReadFailure(
+            ChainReadFailureKind.badStatus,
+            statusCode: response.statusCode,
+          ),
+        );
+      }
+      final body =
+          await response.transform(utf8.decoder).join().timeout(timeout);
+      final decoded = jsonDecode(body);
+      if (decoded is! Map<String, dynamic>) {
+        return _JsonRead.failed(
+          ChainReadFailure(
+            ChainReadFailureKind.malformedBody,
+            detail: 'top level ${decoded.runtimeType}',
+          ),
+        );
+      }
+      return _JsonRead.ok(decoded);
+    } on TimeoutException {
+      return _JsonRead.failed(
+        ChainReadFailure(
+          ChainReadFailureKind.timedOut,
+          detail: '${timeout.inSeconds}s budget',
+        ),
+      );
+    } on FormatException catch (e) {
+      return _JsonRead.failed(
+        ChainReadFailure(
+          ChainReadFailureKind.malformedBody,
+          detail: e.message,
+        ),
+      );
+    } on IOException catch (e) {
+      return _JsonRead.failed(
+        ChainReadFailure(
+          ChainReadFailureKind.unreachable,
+          detail: e.toString(),
+        ),
+      );
+    }
+  }
+
+  /// Reason-less form for the read paths that already degrade to an empty
+  /// list. A missing validator list renders as "nothing to show", which is not
+  /// a claim about the chain; a missing balance rendered as 0 is a claim about
+  /// the user's money, which is why [balance] uses [_readJson] directly.
+  Future<Map<String, dynamic>?> _getJson(String url) async =>
+      (await _readJson(url)).json;
+
+  /// LCD amounts are integer strings, except distribution totals which carry a
+  /// decimal tail ('1234.500000000000000000'). The tail is dropped rather than
+  /// rounded up: the chain never pays out more than the integer part.
+  /// Returns null for anything that is not a number, so the caller reports a
+  /// malformed body instead of quietly counting it as zero.
+  static BigInt? _amountOf(Object? raw) {
+    if (raw == null) return BigInt.zero;
+    return BigInt.tryParse(raw.toString().split('.').first);
   }
 
   static String _sumDenom(Object? rows, String denom) {
@@ -182,48 +359,121 @@ class ChainClient {
     return total.toString();
   }
 
+  static BalanceUnavailable _malformed(String detail) => BalanceUnavailable(
+        ChainReadFailure(
+          ChainReadFailureKind.malformedBody,
+          detail: detail,
+        ),
+      );
+
   /// Spendable, bonded and claimable in one round trip set.
-  Future<ChainBalance> balance(ChainEntry chain, String address) async {
+  ///
+  /// All three legs have to answer. A [ChainBalance] carries three numbers the
+  /// screens print as fact, so tolerating a failed leg would mean inventing a
+  /// zero for it - the false claim this whole type exists to prevent. When one
+  /// leg fails the caller gets [BalanceUnavailable] with the reason, and the
+  /// screens say the balance is unknown rather than that it is zero.
+  Future<BalanceRead> balance(ChainEntry chain, String address) async {
+    if (!enabled) {
+      return const BalanceUnavailable(
+        ChainReadFailure(ChainReadFailureKind.readsDisabled),
+      );
+    }
     final rest = _restOf(chain);
     if (rest == null) {
-      return ChainBalance(
-        chainId: chain.chainId,
-        available: '0',
-        staked: '0',
-        rewards: '0',
+      return const BalanceUnavailable(
+        ChainReadFailure(ChainReadFailureKind.noEndpoint),
       );
     }
     final denom = chain.coinMinimalDenom;
 
-    final results = await Future.wait([
-      _getJson('$rest/cosmos/bank/v1beta1/balances/$address'),
-      _getJson('$rest/cosmos/staking/v1beta1/delegations/$address'),
-      _getJson('$rest/cosmos/distribution/v1beta1/delegators/$address/rewards'),
+    final reads = await Future.wait([
+      // A high page limit because the denom we want can sit behind the default
+      // 100-row page on an account holding many IBC vouchers, and "not on the
+      // page I read" must never be reported as zero.
+      _readJson(
+        '$rest/cosmos/bank/v1beta1/balances/$address?pagination.limit=1000',
+      ),
+      _readJson('$rest/cosmos/staking/v1beta1/delegations/$address'),
+      _readJson('$rest/cosmos/distribution/v1beta1/delegators/$address/rewards'),
     ]);
+    for (final read in reads) {
+      final failure = read.failure;
+      if (failure != null) return BalanceUnavailable(failure);
+    }
 
-    final available = _sumDenom(results[0]?['balances'], denom);
+    final rows = reads[0].json?['balances'];
+    if (rows is! List) return _malformed('balances is not a list');
 
-    var staked = BigInt.zero;
-    final delegations = results[1]?['delegation_responses'];
-    if (delegations is List) {
-      for (final row in delegations) {
-        final balance = (row as Map)['balance'];
-        if (balance is Map && balance['denom'] == denom) {
-          staked += BigInt.tryParse(
-                (balance['amount'] as String? ?? '0').split('.').first,
-              ) ??
-              BigInt.zero;
+    var available = BigInt.zero;
+    var matchedDenom = false;
+    final otherDenoms = <String>[];
+    for (final row in rows) {
+      if (row is! Map) return _malformed('balances row is not an object');
+      final rowDenom = row['denom'];
+      if (rowDenom != denom) {
+        if (rowDenom is String && rowDenom.isNotEmpty) {
+          otherDenoms.add(rowDenom);
         }
+        continue;
+      }
+      final amount = _amountOf(row['amount']);
+      if (amount == null) return _malformed('balance amount is not a number');
+      matchedDenom = true;
+      available += amount;
+    }
+    if (!matchedDenom) {
+      // Nothing for this denom on the page we read. That is a real zero only
+      // if there was no further page.
+      final nextKey = (reads[0].json?['pagination'] as Map?)?['next_key'];
+      if (nextKey is String && nextKey.isNotEmpty) {
+        return const BalanceUnavailable(
+          ChainReadFailure(ChainReadFailureKind.incompletePage),
+        );
       }
     }
 
-    final rewards = _sumDenom(results[2]?['total'], denom);
+    var staked = BigInt.zero;
+    final delegations = reads[1].json?['delegation_responses'];
+    // An LCD may omit an empty collection entirely; a present non-list means
+    // the body is not the schema we asked for.
+    if (delegations is List) {
+      for (final row in delegations) {
+        if (row is! Map) return _malformed('delegation row is not an object');
+        final balance = row['balance'];
+        if (balance is! Map || balance['denom'] != denom) continue;
+        final amount = _amountOf(balance['amount']);
+        if (amount == null) {
+          return _malformed('delegation amount is not a number');
+        }
+        staked += amount;
+      }
+    } else if (delegations != null) {
+      return _malformed('delegation_responses is not a list');
+    }
 
-    return ChainBalance(
-      chainId: chain.chainId,
-      available: available,
-      staked: staked.toString(),
-      rewards: rewards,
+    var rewards = BigInt.zero;
+    final totals = reads[2].json?['total'];
+    if (totals is List) {
+      for (final row in totals) {
+        if (row is! Map) return _malformed('rewards row is not an object');
+        if (row['denom'] != denom) continue;
+        final amount = _amountOf(row['amount']);
+        if (amount == null) return _malformed('reward amount is not a number');
+        rewards += amount;
+      }
+    } else if (totals != null) {
+      return _malformed('rewards total is not a list');
+    }
+
+    return BalanceLoaded(
+      ChainBalance(
+        chainId: chain.chainId,
+        available: available.toString(),
+        staked: staked.toString(),
+        rewards: rewards.toString(),
+        otherDenoms: List.unmodifiable(otherDenoms),
+      ),
     );
   }
 
@@ -592,238 +842,12 @@ class ChainClient {
     return items.take(limit).toList();
   }
 
-  static String normalizeChannelId(String raw) {
-    final value = raw.trim().toLowerCase();
-    if (value.isEmpty) return '';
-    if (RegExp(r'^channel-\d+$').hasMatch(value)) return value;
-    if (RegExp(r'^\d+$').hasMatch(value)) return 'channel-$value';
-    return value;
-  }
-
-  static IbcChannelState _mapState(Object? raw) {
-    final s = (raw ?? '').toString().toUpperCase();
-    if (s.contains('OPEN')) return IbcChannelState.open;
-    if (s.contains('CLOSED')) return IbcChannelState.closed;
-    if (s.contains('INIT')) return IbcChannelState.init;
-    if (s.contains('TRY')) return IbcChannelState.tryOpen;
-    return IbcChannelState.unknown;
-  }
-
-  Future<String?> _connectionChainId(
-    String rest,
-    String connectionId,
-    Map<String, String?> cache,
-  ) async {
-    if (cache.containsKey(connectionId)) return cache[connectionId];
-    final conn = await _getJson(
-      '$rest/ibc/core/connection/v1/connections/${Uri.encodeComponent(connectionId)}',
-    );
-    final clientId = (conn?['connection'] as Map?)?['client_id'] as String? ??
-        conn?['client_id'] as String?;
-    if (clientId == null) {
-      cache[connectionId] = null;
-      return null;
-    }
-    final state = await _getJson(
-      '$rest/ibc/core/client/v1/client_states/${Uri.encodeComponent(clientId)}',
-    );
-    final nested = state?['client_state'] is Map
-        ? state!['client_state'] as Map
-        : state;
-    final chainId = nested?['chain_id'] as String?;
-    cache[connectionId] = chainId;
-    return chainId;
-  }
-
-  /// Open transfer channels on [source] that connect to [destChainId].
-  Future<List<IbcChannelOption>> findIbcChannels(
-    ChainEntry source,
-    String destChainId,
-  ) async {
-    if (!enabled || destChainId.isEmpty || source.chainId == destChainId) {
-      return const [];
-    }
-    final rest = _restOf(source);
-    if (rest == null) return const [];
-
-    final raw = <Map>[];
-    String? key;
-    for (var page = 0; page < 3; page++) {
-      final params = StringBuffer('pagination.limit=100');
-      if (key != null) {
-        params.write('&pagination.key=${Uri.encodeComponent(key)}');
-      }
-      final body = await _getJson('$rest/ibc/core/channel/v1/channels?$params');
-      final rows = body?['channels'];
-      if (rows is List) {
-        for (final row in rows) {
-          if (row is! Map) continue;
-          if ((row['port_id'] as String? ?? 'transfer') != 'transfer') continue;
-          raw.add(row);
-        }
-      }
-      final next = (body?['pagination'] as Map?)?['next_key'] as String?;
-      if (next == null || next.isEmpty) break;
-      key = next;
-    }
-
-    final cache = <String, String?>{};
-    final matches = <IbcChannelOption>[];
-    for (final row in raw) {
-      final channelId = row['channel_id'] as String?;
-      if (channelId == null) continue;
-      final state = _mapState(row['state']);
-      if (state != IbcChannelState.open) continue;
-      final hops = row['connection_hops'];
-      final connectionId =
-          hops is List && hops.isNotEmpty ? hops.first as String? : null;
-      if (connectionId == null) continue;
-      final counterpartyChainId =
-          await _connectionChainId(rest, connectionId, cache);
-      if (counterpartyChainId != destChainId) continue;
-      final counterparty = row['counterparty'] as Map?;
-      matches.add(
-        IbcChannelOption(
-          channelId: channelId,
-          portId: row['port_id'] as String? ?? 'transfer',
-          counterpartyChannelId: counterparty?['channel_id'] as String? ?? '',
-          counterpartyChainId: counterpartyChainId,
-          connectionId: connectionId,
-          state: state,
-        ),
-      );
-    }
-    matches.sort((a, b) => a.channelId.compareTo(b.channelId));
-    return matches;
-  }
-
-  Future<IbcChannelCheck> validateIbcChannel(
-    ChainEntry source,
-    String channelRaw, {
-    String? destChainId,
-  }) async {
-    final channelId = normalizeChannelId(channelRaw);
-    const portId = 'transfer';
-    if (channelId.isEmpty) {
-      return const IbcChannelCheck(
-        ok: false,
-        state: IbcChannelState.unknown,
-        channelId: '',
-        message: 'Enter a channel id (e.g. channel-141)',
-      );
-    }
-    if (!enabled) {
-      return IbcChannelCheck(
-        ok: false,
-        state: IbcChannelState.unknown,
-        channelId: channelId,
-        message: 'Turn on live reads to check channels',
-      );
-    }
-    final rest = _restOf(source);
-    if (rest == null) {
-      return IbcChannelCheck(
-        ok: false,
-        state: IbcChannelState.unknown,
-        channelId: channelId,
-        message: 'No REST endpoint for this chain',
-      );
-    }
-    final body = await _getJson(
-      '$rest/ibc/core/channel/v1/channels/${Uri.encodeComponent(channelId)}/ports/$portId',
-    );
-    final row = body?['channel'] as Map?;
-    if (row == null) {
-      return IbcChannelCheck(
-        ok: false,
-        state: IbcChannelState.unknown,
-        channelId: channelId,
-        message: 'Channel not found on this chain',
-      );
-    }
-    final state = _mapState(row['state']);
-    final hops = row['connection_hops'];
-    final connectionId =
-        hops is List && hops.isNotEmpty ? hops.first as String? : null;
-    String? counterpartyChainId;
-    if (connectionId != null) {
-      counterpartyChainId =
-          await _connectionChainId(rest, connectionId, {});
-    }
-    final counterparty = row['counterparty'] as Map?;
-    if (state != IbcChannelState.open) {
-      return IbcChannelCheck(
-        ok: false,
-        state: state,
-        channelId: channelId,
-        counterpartyChannelId: counterparty?['channel_id'] as String?,
-        counterpartyChainId: counterpartyChainId,
-        message: 'Channel is ${state.name}, not open',
-      );
-    }
-    if (destChainId != null &&
-        counterpartyChainId != null &&
-        counterpartyChainId != destChainId) {
-      return IbcChannelCheck(
-        ok: false,
-        state: state,
-        channelId: channelId,
-        counterpartyChannelId: counterparty?['channel_id'] as String?,
-        counterpartyChainId: counterpartyChainId,
-        message: 'Open, but connects to $counterpartyChainId',
-      );
-    }
-    return IbcChannelCheck(
-      ok: true,
-      state: state,
-      channelId: channelId,
-      counterpartyChannelId: counterparty?['channel_id'] as String?,
-      counterpartyChainId: counterpartyChainId,
-      message: counterpartyChainId == null
-          ? 'Open and ready'
-          : 'Open · $counterpartyChainId',
-    );
-  }
-
+  /// IBC channel discovery, validation and state parsing used to live here.
+  /// It now lives in `lib/services/interchain/channels.dart`, the Dart mirror
+  /// of `@zunialab/interchain`'s `channels.ts`, because three clients had three
+  /// copies of it and they disagreed: this one tested a channel state for OPEN
+  /// before TRYOPEN, so `STATE_TRYOPEN` — a channel still mid-handshake —
+  /// reported as ready to receive funds.
   void close() => _http.close(force: true);
 }
 
-enum IbcChannelState { open, closed, init, tryOpen, unknown }
-
-@immutable
-class IbcChannelOption {
-  const IbcChannelOption({
-    required this.channelId,
-    required this.portId,
-    required this.counterpartyChannelId,
-    required this.counterpartyChainId,
-    required this.connectionId,
-    required this.state,
-  });
-
-  final String channelId;
-  final String portId;
-  final String counterpartyChannelId;
-  final String? counterpartyChainId;
-  final String connectionId;
-  final IbcChannelState state;
-}
-
-@immutable
-class IbcChannelCheck {
-  const IbcChannelCheck({
-    required this.ok,
-    required this.state,
-    required this.channelId,
-    required this.message,
-    this.counterpartyChannelId,
-    this.counterpartyChainId,
-  });
-
-  final bool ok;
-  final IbcChannelState state;
-  final String channelId;
-  final String message;
-  final String? counterpartyChannelId;
-  final String? counterpartyChainId;
-}

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/screens/asset_detail_screen.dart';
 import 'package:zunia_mobile/screens/chain_detail_screen.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
+import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/receive_screen.dart';
 import 'package:zunia_mobile/screens/send_screen.dart';
 import 'package:zunia_mobile/screens/tabs/swap_tab.dart';
@@ -13,6 +15,7 @@ import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/util/amounts.dart';
 import 'package:zunia_mobile/widgets/chain_avatar.dart';
+import 'package:zunia_mobile/widgets/chain_picker.dart';
 import 'package:zunia_mobile/widgets/wallet_header.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
@@ -26,6 +29,10 @@ class HomeTab extends ConsumerStatefulWidget {
 
 class _HomeTabState extends ConsumerState<HomeTab> {
   String _tab = 'tokens';
+
+  /// Which chain the NFTs segment is showing. Null until the user picks one,
+  /// at which point the first enabled chain is used.
+  String? _nftChainId;
 
   void _open(Widget screen) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
@@ -134,12 +141,27 @@ class _HomeTabState extends ConsumerState<HomeTab> {
     AppPreferences prefs,
   ) {
     if (accounts.isEmpty) {
+      final wallet = ref.watch(walletProvider);
+      final phrase = ref.watch(phraseProvider);
+      final title = phrase == null
+          ? 'Wallet locked'
+          : wallet.accounts.isEmpty
+              ? 'Account missing'
+              : wallet.enabledChainIds.isEmpty
+                  ? 'No networks enabled'
+                  : 'No addresses yet';
+      final description = phrase == null
+          ? 'Unlock the vault to derive addresses for your chains.'
+          : wallet.accounts.isEmpty
+              ? 'Wallet metadata was incomplete. Unlock again or re-import to repair.'
+              : wallet.enabledChainIds.isEmpty
+                  ? 'Add a chain to start deriving addresses for this wallet.'
+                  : 'Enabled chains could not be derived. Check Manage networks.';
       return [
         const SizedBox(height: 12),
         ZuniaEmptyState(
-          title: 'No networks enabled',
-          description:
-              'Add a chain to start deriving addresses for this wallet.',
+          title: title,
+          description: description,
           action: ZuniaButton(
             label: 'Manage networks',
             size: ZuniaButtonSize.sm,
@@ -184,13 +206,21 @@ class _HomeTabState extends ConsumerState<HomeTab> {
         ];
 
       case 'nfts':
-        return const [
-          SizedBox(height: 12),
-          ZuniaEmptyState(
-            title: 'No collectibles',
-            description:
-                'CW-721 and ICS-721 collections held by this wallet show here.',
+        // One chain at a time, and only the chain the user picked. Scanning
+        // every enabled chain on tab open would fire wasm queries at a dozen
+        // public nodes because a tab changed, which is neither fast nor the
+        // user's decision.
+        final nftChainId = accounts.any((a) => a.chain.chainId == _nftChainId)
+            ? _nftChainId!
+            : accounts.first.chain.chainId;
+        return [
+          const SizedBox(height: 12),
+          ChainPicker(
+            value: nftChainId,
+            onChanged: (value) => setState(() => _nftChainId = value),
           ),
+          const SizedBox(height: 14),
+          NftGalleryView(key: ValueKey(nftChainId), chainId: nftChainId),
         ];
 
       default:
@@ -202,8 +232,9 @@ class _HomeTabState extends ConsumerState<HomeTab> {
                 tone: ZuniaCalloutTone.info,
                 title: 'Live reads are off',
                 body:
-                    'Addresses are derived locally. Turn on live reads in '
-                    'Settings to fetch balances from public endpoints.',
+                    'Balances stay offline by default. Open Settings → '
+                    'Preferences and turn on Live reads to fetch from public '
+                    'endpoints. Addresses still derive locally.',
               ),
             ),
           for (final a in accounts)
@@ -212,7 +243,7 @@ class _HomeTabState extends ConsumerState<HomeTab> {
               amount: balances[a.chain.chainId]?.available,
               hidden: prefs.hideAmounts,
               onTap: () =>
-                  _open(ChainDetailScreen(chainId: a.chain.chainId)),
+                  _open(AssetDetailScreen(chainId: a.chain.chainId)),
             ),
         ];
     }
@@ -410,19 +441,13 @@ class _SwapSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent,
       body: SafeArea(
-        child: Column(
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: IconButton(
-                tooltip: 'Back',
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(Icons.arrow_back),
-              ),
-            ),
-            const Expanded(child: SwapTab()),
-          ],
+        bottom: false,
+        child: ZuniaScreenScaffold(
+          title: 'Swap',
+          onBack: () => Navigator.of(context).pop(),
+          body: const SwapTab(showHeader: false),
         ),
       ),
     );

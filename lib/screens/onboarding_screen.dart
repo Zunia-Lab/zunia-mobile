@@ -204,27 +204,35 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     });
     try {
       final password = _password.text;
+      final walletName = _walletName.text;
       final kernel = WalletKernel.instance;
       final envelope = kernel.sealKeyring(
         phrase: phrase,
         password: password,
-        metadata: {'name': _walletName.text.trim()},
+        metadata: {'name': walletName.trim()},
       );
       final keystore = ref.read(keystoreProvider);
       await keystore.createVault(password: password, envelopeJson: envelope);
       await keystore.setBackupVerified(verified);
       final vault = await keystore.unlockWithPassword(password);
       await ref.read(walletProvider.notifier).initialise(
-            walletName: _walletName.text,
+            walletName: walletName,
             enabledChainIds: _orderedSelection(),
           );
+      if (!mounted) return;
+      FocusManager.instance.primaryFocus?.unfocus();
+      // Drop text fields before session swap disposes their controllers.
+      setState(() => _busy = true);
+      await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
       ref.read(phraseProvider.notifier).state = phrase;
       ref.read(sessionProvider.notifier).state = vault;
     } catch (e) {
       _setError(e.toString());
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && ref.read(sessionProvider) == null) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -278,6 +286,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(

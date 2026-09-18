@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:zunia_mobile/screens/delegate_screen.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/rewards_screen.dart';
+import 'package:zunia_mobile/screens/validator_detail_screen.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
@@ -342,15 +342,11 @@ class _EarnTabState extends ConsumerState<EarnTab> {
                               metaWarn: row.jailed,
                               trailing: row.jailed ? '—' : 'STAKE',
                               trailingAccent: !row.jailed,
-                              onTap: row.jailed
-                                  ? null
-                                  : () => Navigator.of(context).push(
+                              onTap: () => Navigator.of(context).push(
                                         MaterialPageRoute(
-                                          builder: (_) => DelegateScreen(
+                                          builder: (_) => ValidatorDetailScreen(
                                             chainId: chainId,
-                                            moniker: row.moniker,
-                                            operatorAddress:
-                                                row.operatorAddress,
+                                            validator: row,
                                           ),
                                         ),
                                       ),

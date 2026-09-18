@@ -1,20 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
 import 'package:zunia_mobile/screens/address_book_screen.dart';
 import 'package:zunia_mobile/screens/bridge_screen.dart';
 import 'package:zunia_mobile/screens/governance_screen.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
+import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/notifications_screen.dart';
+import 'package:zunia_mobile/screens/dapp_browser_screen.dart';
 import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
 import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
 import 'package:zunia_mobile/screens/rewards_screen.dart';
+import 'package:zunia_mobile/screens/sessions_screen.dart';
 import 'package:zunia_mobile/screens/settings_screen.dart';
 import 'package:zunia_mobile/screens/tabs/browser_tab.dart';
 import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
 import 'package:zunia_mobile/screens/tabs/home_tab.dart';
 import 'package:zunia_mobile/screens/tabs/missions_tab.dart';
 import 'package:zunia_mobile/screens/tabs/swap_tab.dart';
+import 'package:zunia_mobile/services/deep_link_handler.dart';
+import 'package:zunia_mobile/services/native_connect_service.dart';
+import 'package:zunia_mobile/services/wallet_connect_service.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -38,6 +47,76 @@ class _RootShellState extends ConsumerState<RootShell> {
   ];
 
   String _tab = 'home';
+  final _subs = <StreamSubscription<dynamic>>[];
+  bool _sheetOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_listenConnect);
+  }
+
+  void _listenConnect() {
+    final native = ref.read(nativeConnectProvider);
+    final wc = ref.read(walletConnectProvider);
+    final deep = ref.read(deepLinkHandlerProvider);
+
+    _subs.add(native.pendingConnectRequests.listen(_onNativeConnect));
+    _subs.add(native.pendingSignRequests.listen(_onNativeSign));
+    _subs.add(wc.sessionProposals.listen(_onWcProposal));
+    _subs.add(deep.links.listen(_onDeepLink));
+  }
+
+  Future<void> _onDeepLink(Uri uri) async {
+    if (!mounted) return;
+    final dappUrl = DeepLinkHandler.parseDappUrl(uri);
+    if (dappUrl == null || dappUrl.isEmpty) return;
+    await DappBrowserScreen.open(context, url: dappUrl);
+  }
+
+  Future<void> _onNativeConnect(NativeConnectRequest request) async {
+    if (!mounted || _sheetOpen) return;
+    _sheetOpen = true;
+    try {
+      await showDappConnectSheet(
+        context,
+        offer: DappConnectOffer.fromNative(request),
+      );
+    } finally {
+      _sheetOpen = false;
+    }
+  }
+
+  Future<void> _onNativeSign(NativeSignRequest request) async {
+    if (!mounted || _sheetOpen) return;
+    _sheetOpen = true;
+    try {
+      await showNativeSignSheet(context, request: request);
+    } finally {
+      _sheetOpen = false;
+    }
+  }
+
+  Future<void> _onWcProposal(WcSessionProposal proposal) async {
+    if (!mounted || _sheetOpen) return;
+    _sheetOpen = true;
+    try {
+      await showDappConnectSheet(
+        context,
+        offer: DappConnectOffer.fromWcProposal(proposal),
+      );
+    } finally {
+      _sheetOpen = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final sub in _subs) {
+      sub.cancel();
+    }
+    super.dispose();
+  }
 
   void _open(Widget screen) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
@@ -64,6 +143,7 @@ class _RootShellState extends ConsumerState<RootShell> {
           },
           onNetworks: () => _fromDrawer(const NetworksScreen()),
           onBridge: () => _fromDrawer(const BridgeScreen()),
+          onCollectibles: () => _fromDrawer(const NftCollectionScreen()),
           onGovernance: () => _fromDrawer(const GovernanceScreen()),
           onActivity: () => _fromDrawer(const ActivityScreen()),
           onRewards: () => _fromDrawer(const RewardsScreen()),
@@ -76,9 +156,17 @@ class _RootShellState extends ConsumerState<RootShell> {
             )
                 .then((uri) {
               if (!context.mounted || uri == null || uri.isEmpty) return;
+              final parsed = Uri.tryParse(uri);
+              if (parsed != null &&
+                  NativeConnectService.parseConnectLink(parsed) != null) {
+                // Native handshake emits pendingConnectRequests → sheet.
+                ref.read(nativeConnectProvider).connectFromDeepLink(parsed);
+                return;
+              }
               showDappConnectSheet(context, uri: uri);
             });
           },
+          onSessions: () => _fromDrawer(const SessionsScreen()),
           onAddressBook: () => _fromDrawer(const AddressBookScreen()),
           onNotifications: () => _fromDrawer(const NotificationsScreen()),
           onSettings: () => _fromDrawer(const SettingsScreen()),
@@ -151,23 +239,64 @@ class _RootShellState extends ConsumerState<RootShell> {
         ),
         body: SafeArea(
           bottom: false,
-          child: IndexedStack(
-            index: index < 0 ? 0 : index,
-            children: const [
-              HomeTab(),
-              EarnTab(),
-              SwapTab(),
-              MissionsTab(),
-              BrowserTab(),
-            ],
-          ),
-        ),
-        bottomNavigationBar: SafeArea(
-          top: false,
-          child: ZuniaTabBar(
-            items: _tabs,
-            value: _tab,
-            onChanged: (v) => setState(() => _tab = v),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // Floating dock height ≈ pill + outer padding + home indicator.
+              // Keep this ahead of content so cards never peek under the bar.
+              final dockClearance =
+                  78.0 + MediaQuery.viewPaddingOf(context).bottom;
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: Padding(
+                      padding: EdgeInsets.only(bottom: dockClearance),
+                      child: IndexedStack(
+                        index: index < 0 ? 0 : index,
+                        children: const [
+                          HomeTab(),
+                          EarnTab(),
+                          SwapTab(),
+                          MissionsTab(),
+                          BrowserTab(),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              s.bg.withValues(alpha: 0),
+                              s.bg.withValues(alpha: 0.72),
+                              s.bg,
+                            ],
+                            stops: const [0, 0.45, 1],
+                          ),
+                        ),
+                        child: SizedBox(height: dockClearance + 12),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ZuniaTabBar(
+                      items: _tabs,
+                      value: _tab,
+                      onChanged: (v) => setState(() => _tab = v),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -181,10 +310,12 @@ class _Drawer extends ConsumerWidget {
     required this.onEcosystem,
     required this.onNetworks,
     required this.onBridge,
+    required this.onCollectibles,
     required this.onGovernance,
     required this.onActivity,
     required this.onRewards,
     required this.onPair,
+    required this.onSessions,
     required this.onAddressBook,
     required this.onNotifications,
     required this.onSettings,
@@ -195,10 +326,12 @@ class _Drawer extends ConsumerWidget {
   final VoidCallback onEcosystem;
   final VoidCallback onNetworks;
   final VoidCallback onBridge;
+  final VoidCallback onCollectibles;
   final VoidCallback onGovernance;
   final VoidCallback onActivity;
   final VoidCallback onRewards;
   final VoidCallback onPair;
+  final VoidCallback onSessions;
   final VoidCallback onAddressBook;
   final VoidCallback onNotifications;
   final VoidCallback onSettings;
@@ -211,6 +344,10 @@ class _Drawer extends ConsumerWidget {
     final address = ref.watch(primaryAddressProvider);
     final prefs = ref.watch(preferencesProvider);
     final accounts = ref.watch(chainAccountsProvider);
+    final wc = ref.watch(walletConnectProvider);
+    final native = ref.watch(nativeConnectProvider);
+    final sessionCount =
+        wc.activeSessions.length + native.activeSessions.length;
 
     return ZuniaDrawerPanel(
       children: [
@@ -317,6 +454,13 @@ class _Drawer extends ConsumerWidget {
           label: 'Bridge',
           onTap: onBridge,
         ),
+        // Same place in the drawer as the other clients put it, so the three
+        // products stay recognisably one product.
+        ZuniaDrawerRow(
+          icon: Icons.image_outlined,
+          label: 'Collectibles',
+          onTap: onCollectibles,
+        ),
         ZuniaDrawerRow(
           icon: Icons.how_to_vote_outlined,
           label: 'Governance',
@@ -339,6 +483,12 @@ class _Drawer extends ConsumerWidget {
           icon: Icons.qr_code_scanner,
           label: 'Pair a device',
           onTap: onPair,
+        ),
+        ZuniaDrawerRow(
+          icon: Icons.link,
+          label: 'Connected apps',
+          meta: sessionCount == 0 ? null : '$sessionCount',
+          onTap: onSessions,
         ),
         ZuniaDrawerRow(
           icon: Icons.contacts_outlined,

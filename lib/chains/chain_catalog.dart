@@ -22,6 +22,7 @@ class ChainEntry {
     this.rpc,
     this.rest,
     this.iconUrl,
+    this.features,
   });
 
   factory ChainEntry.fromJson(Map<String, dynamic> json) {
@@ -46,6 +47,16 @@ class ChainEntry {
       rpc: json['rpc'] as String?,
       rest: json['rest'] as String?,
       iconUrl: json['iconUrl'] as String?,
+      // Null when the key is absent, never []: "nobody told us" and "this
+      // chain declares no capabilities" are different facts, and only the
+      // second may be used to rule a chain out. The generator currently drops
+      // this array, so null is the common case today.
+      features: json['features'] is List
+          ? [
+              for (final value in json['features'] as List)
+                if (value is String) value,
+            ]
+          : null,
     );
   }
 
@@ -64,6 +75,14 @@ class ChainEntry {
   final String? rpc;
   final String? rest;
   final String? iconUrl;
+
+  /// Registry capability flags, e.g. `['cosmwasm']`.
+  ///
+  /// Gates the whole NFT surface: only a chain that runs CosmWasm can hold a
+  /// CW721 token. Null means the catalog did not carry the array — see
+  /// `zunia-extension/scripts/generate-chain-catalog.mjs`, which drops it — and
+  /// the app then asks the chain rather than assuming either answer.
+  final List<String>? features;
 
   bool get isTestnet => network == 'testnet';
 
@@ -92,6 +111,7 @@ class ChainEntry {
         if (rpc != null) 'rpc': rpc,
         if (rest != null) 'rest': rest,
         if (iconUrl != null) 'iconUrl': iconUrl,
+        if (features != null) 'features': features,
       };
 
   bool matches(String query) {

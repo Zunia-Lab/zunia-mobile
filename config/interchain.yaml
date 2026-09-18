@@ -1,0 +1,39 @@
+# Zunia mobile — cross-chain swap and IBC routing config
+#
+# This file documents the build-time values in lib/config/interchain_config.dart.
+# Nothing loads it at runtime: the values are compiled in with --dart-define, so
+# a build either has them or fails closed with a visible reason.
+
+schema_version: 1
+
+# Osmosis crosschain-swaps (XCS).
+#
+# NOT SHIPPED WITH A DEFAULT. The addresses circulating in Osmosis governance
+# and docs are unverified candidates; a wrong contract address in an ibc-hooks
+# memo sends funds to a contract that will not send them back. The app also
+# queries /cosmwasm/wasm/v1/contract/{address} before building a memo and
+# disables the swap when the address is unset or absent on chain.
+#
+#   flutter build apk --dart-define=OSMOSIS_XCS_CONTRACT=osmo1...
+crosschain_swaps:
+  chain_id: ${OSMOSIS_CHAIN_ID:-osmosis-1}
+  contract_address: ${OSMOSIS_XCS_CONTRACT}
+
+# Osmosis sidecar query server (SQS), which prices swaps. Without it the wallet
+# can only price a pool it is told about, and the quote panel says so.
+router:
+  base_url: ${OSMOSIS_SQS_URL:-https://sqs.osmosis.zone}
+
+# Slippage is a 0-100 percentage: the swaprouter divides by 100 itself, so
+# sending 0.005 for "0.5%" asks for 0.005% and the swap reverts.
+slippage:
+  default_percent: 1
+  presets: [0.5, 1, 3]
+  # The "high slippage" threshold lives in zunia_ui's zuniaCheckSlippage, so the
+  # warning the user sees and the rule that produces it cannot drift apart.
+  # window_seconds is Option<u64> on the contract and defaults to 3600 there.
+  # Left unset on purpose rather than guessed.
+  twap_window_seconds: null
+
+packets:
+  timeout_minutes: 10

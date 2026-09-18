@@ -70,7 +70,9 @@ class _RevealPhraseScreenState extends ConsumerState<RevealPhraseScreen> {
         : phrase.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
 
     return Scaffold(
+      backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Recovery phrase',
           onBack: () => Navigator.of(context).pop(),

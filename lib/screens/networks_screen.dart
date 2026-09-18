@@ -34,7 +34,9 @@ class _NetworksScreenState extends ConsumerState<NetworksScreen> {
         : const <ChainEntry>[];
 
     return Scaffold(
+      backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Networks',
           onBack: () => Navigator.of(context).pop(),

@@ -4,6 +4,8 @@
 /// are off, so screens render their "reads are off" state instead of an error.
 library;
 
+import 'dart:collection';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/services/chain_client.dart';
@@ -18,18 +20,65 @@ final chainClientProvider = Provider<ChainClient>((ref) {
   return client;
 });
 
+/// What [balancesProvider] hands to screens: the chains that answered, plus
+/// the reason for each chain that is missing.
+///
+/// A chain whose read failed is absent from the map instead of present with
+/// zeros. Every screen already renders an absent chain as '—', while a zero
+/// reads as "this account is empty" - a claim the wallet cannot make when the
+/// endpoint never answered. It stays a plain `Map<String, ChainBalance>` so
+/// screens that only need the numbers are unaffected; [failures] rides along
+/// for the screens that must show why a number is missing.
+class BalanceReads extends UnmodifiableMapView<String, ChainBalance> {
+  BalanceReads(super.values, this.failures);
+
+  /// Keyed by chain id, for chains absent from this map.
+  final Map<String, ChainReadFailure> failures;
+
+  static final BalanceReads empty = BalanceReads(const {}, const {});
+}
+
 /// Balances for every enabled chain of the active account.
 final balancesProvider = FutureProvider<Map<String, ChainBalance>>((ref) async {
   final client = ref.watch(chainClientProvider);
   final accounts = ref.watch(chainAccountsProvider);
-  if (!client.enabled || accounts.isEmpty) return const {};
+  if (accounts.isEmpty) return BalanceReads.empty;
+  if (!client.enabled) {
+    return BalanceReads(const {}, {
+      for (final a in accounts)
+        a.chain.chainId:
+            const ChainReadFailure(ChainReadFailureKind.readsDisabled),
+    });
+  }
 
   final entries = await Future.wait(
     accounts.map(
-      (a) async => MapEntry(a.chain.chainId, await client.balance(a.chain, a.address)),
+      (a) async =>
+          MapEntry(a.chain.chainId, await client.balance(a.chain, a.address)),
     ),
   );
-  return Map.fromEntries(entries);
+
+  final values = <String, ChainBalance>{};
+  final failures = <String, ChainReadFailure>{};
+  for (final entry in entries) {
+    switch (entry.value) {
+      case BalanceLoaded(:final balance):
+        values[entry.key] = balance;
+      case BalanceUnavailable(:final failure):
+        failures[entry.key] = failure;
+    }
+  }
+  return BalanceReads(values, failures);
+});
+
+/// Why a chain is missing from [balancesProvider], keyed by chain id.
+///
+/// Empty while the read is still in flight - "not read yet" is the provider's
+/// loading state, not a failure.
+final balanceFailuresProvider =
+    Provider<Map<String, ChainReadFailure>>((ref) {
+  final reads = ref.watch(balancesProvider).valueOrNull;
+  return reads is BalanceReads ? reads.failures : const {};
 });
 
 ChainEntry? _chain(String chainId) =>

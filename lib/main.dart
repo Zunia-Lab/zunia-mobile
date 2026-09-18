@@ -5,6 +5,7 @@ import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/onboarding_screen.dart';
 import 'package:zunia_mobile/screens/root_shell.dart';
 import 'package:zunia_mobile/screens/root_warning_screen.dart';
+import 'package:zunia_mobile/screens/splash_screen.dart';
 import 'package:zunia_mobile/screens/unlock_screen.dart';
 import 'package:zunia_mobile/security/device_integrity.dart';
 import 'package:zunia_mobile/security/screen_security.dart';
@@ -95,17 +96,11 @@ class _AppGate extends ConsumerWidget {
           case AppGate.ready:
             return const UnlockScreen();
           case AppGate.loading:
-            return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            );
+            return const SplashScreen();
         }
       },
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
-      error: (e, _) => Scaffold(
-        body: Center(child: Text('Startup error: $e')),
-      ),
+      loading: () => const SplashScreen(),
+      error: (e, _) => SplashScreen(message: 'Startup error: $e'),
     );
   }
 }

@@ -1,0 +1,53 @@
+# Zunia mobile — NFT config
+#
+# Documents the build-time values in lib/config/nft_config.dart. Nothing loads
+# this at runtime: the values are compiled in with --dart-define, so a build
+# either has them or fails closed with a visible reason.
+
+schema_version: 1
+
+# CW721 contracts this build knows about, per chain.
+#
+# CosmWasm has no chain-wide "NFTs by owner" index — `tokens` is a per-contract
+# query — so a wallet can only ask about contracts it already has an address
+# for. With this empty the collection screen says so and offers the "add a
+# collection address" field, rather than rendering an empty gallery that reads
+# as "you own nothing".
+#
+#   --dart-define=NFT_KNOWN_COLLECTIONS='safrochain-1=addr_safro1abc,addr_safro1def'
+known_collections: ${NFT_KNOWN_COLLECTIONS}
+
+# cw-ics721 bridge contract per chain. NOT SHIPPED WITH A DEFAULT.
+#
+# This contract takes custody of the NFT: `send_nft` escrows the token with it
+# and the destination chain mints a voucher backed by that escrow. A wrong
+# address here escrows the token somewhere nothing can release it from.
+#
+#   --dart-define=ICS721_BRIDGES='safrochain-1=addr_safro1bridge'
+ics721_bridges: ${ICS721_BRIDGES}
+
+# ICS721 channel per directed chain pair. NOT SHIPPED WITH A DEFAULT.
+#
+# ICS721 runs on its own port (wasm.<bridge>), so an ICS20 transfer channel is
+# not interchangeable with one of these.
+#
+#   --dart-define=ICS721_CHANNELS='safrochain-1>osmosis-1=channel-3'
+ics721_channels: ${ICS721_CHANNELS}
+
+# Gateways that artwork and off-chain metadata may be read from.
+#
+# Empty on purpose. Fetching a token_uri tells whoever hosts it the reader's IP
+# address and which token they hold, and a gateway baked into the wallet would
+# route every user's whole collection through one operator. Artwork is also off
+# until the user turns it on, per screen; this only decides what is reachable
+# once they do.
+#
+#   --dart-define=NFT_IPFS_GATEWAYS='https://ipfs.io/ipfs/'
+gateways:
+  ipfs: ${NFT_IPFS_GATEWAYS}
+  arweave: ${NFT_ARWEAVE_GATEWAYS}
+
+# NFT indexers: none. An indexer is a service-specific client, not a URL, and
+# only an indexer can make a holdings list complete. Until one is written, every
+# list this client shows reports itself as partial.
+indexer: null

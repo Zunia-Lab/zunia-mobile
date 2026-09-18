@@ -38,6 +38,7 @@ class _BridgeScreenState extends ConsumerState<BridgeScreen> {
       return Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
+          bottom: false,
           child: ZuniaScreenScaffold(
             title: 'Bridge',
             onBack: () => Navigator.of(context).pop(),
@@ -73,6 +74,7 @@ class _BridgeScreenState extends ConsumerState<BridgeScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Bridge',
           onBack: () => Navigator.of(context).pop(),

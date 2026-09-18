@@ -93,6 +93,7 @@ class _AddChainScreenState extends ConsumerState<AddChainScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Add network',
           onBack: () => Navigator.of(context).pop(),

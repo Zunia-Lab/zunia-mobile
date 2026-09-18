@@ -36,6 +36,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       return Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
+          bottom: false,
           child: ZuniaScreenScaffold(
             title: 'Receive',
             onBack: () => Navigator.of(context).pop(),
@@ -57,6 +58,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Receive',
           onBack: () => Navigator.of(context).pop(),

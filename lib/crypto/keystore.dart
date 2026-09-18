@@ -33,6 +33,7 @@ const _kEnvelopePrefsKey = 'zunia.keystore.envelope';
 const _kVerifiedPrefsKey = 'zunia.keystore.backup_verified';
 const _kWrappingKeyStorageKey = 'zunia.keystore.wrapping_key';
 const _kBioUnlockSecretKey = 'zunia.keystore.bio_unlock_secret';
+const _kBioPasswordKey = 'zunia.keystore.bio_password';
 
 /// Options documented for Secure Enclave / StrongBox best-effort backing.
 FlutterSecureStorage createSecureStorage() {
@@ -148,12 +149,53 @@ class Keystore {
     }
   }
 
-  /// Biometric gate, then verify the stored bio secret matches a password re-entry
-  /// OR, when [password] is provided, unlock fully. When [password] is null, only
-  /// confirms biometrics can access the wrapping key (session soft-unlock).
+  Future<bool> get biometricsAvailable async {
+    try {
+      return await _localAuth.canCheckBiometrics ||
+          await _localAuth.isDeviceSupported();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// True when a password was stored for Face ID / fingerprint unlock.
+  Future<bool> get hasBiometricUnlock async {
+    final stored = await _secure.read(key: _kBioPasswordKey);
+    return stored != null && stored.isNotEmpty;
+  }
+
+  /// Password stored for biometric unlock. Null if not enrolled.
+  Future<String?> readBiometricPassword() => _secure.read(key: _kBioPasswordKey);
+
+  /// After a password unlock, gate with biometrics and remember the password
+  /// for one-tap unlock on later launches.
+  Future<void> enableBiometricUnlock(String password) async {
+    if (password.isEmpty) {
+      throw KeystoreException('Password required to enable biometrics');
+    }
+    // Prove the password opens the vault before storing it.
+    await unlockWithPassword(password);
+    final can = await biometricsAvailable;
+    if (!can) {
+      throw KeystoreException('Biometrics unavailable');
+    }
+    final ok = await _localAuth.authenticate(
+      localizedReason: 'Enable biometric unlock for Zunia',
+      options: const AuthenticationOptions(
+        stickyAuth: true,
+        biometricOnly: false,
+        useErrorDialogs: true,
+      ),
+    );
+    if (!ok) {
+      throw KeystoreException('Biometric authentication failed');
+    }
+    await _secure.write(key: _kBioPasswordKey, value: password);
+  }
+
+  /// Face ID / fingerprint unlock using the password stored at enrollment.
   Future<UnlockedVault> unlockWithBiometrics({String? password}) async {
-    final can = await _localAuth.canCheckBiometrics ||
-        await _localAuth.isDeviceSupported();
+    final can = await biometricsAvailable;
     if (!can) {
       throw KeystoreException('Biometrics unavailable');
     }
@@ -169,24 +211,21 @@ class Keystore {
       throw KeystoreException('Biometric authentication failed');
     }
 
-    final wrappingB64 = await _secure.read(key: _kWrappingKeyStorageKey);
-    if (wrappingB64 == null) {
-      throw KeystoreException('Wrapping key missing from secure storage');
+    if (password != null && password.isNotEmpty) {
+      final vault = await unlockWithPassword(password);
+      await _secure.write(key: _kBioPasswordKey, value: password);
+      return vault;
     }
 
-    if (password == null) {
-      // Soft unlock: biometrics proved access to the wrapping key material.
-      final prefs = await _prefsFactory();
-      final wrapped = prefs.getString(_kEnvelopePrefsKey);
-      if (wrapped == null) {
-        throw KeystoreException('No vault');
-      }
-      return UnlockedVault(
-        envelopeJson: wrapped,
-        sessionToken: base64Encode(_randomBytes(16)),
-      );
+    final stored = await _secure.read(key: _kBioPasswordKey);
+    if (stored == null || stored.isEmpty) {
+      throw KeystoreException('Biometrics not enabled');
     }
-    return unlockWithPassword(password);
+    return unlockWithPassword(stored);
+  }
+
+  Future<void> disableBiometricUnlock() async {
+    await _secure.delete(key: _kBioPasswordKey);
   }
 
   Future<void> wipe() async {
@@ -195,6 +234,7 @@ class Keystore {
     await prefs.remove(_kVerifiedPrefsKey);
     await _secure.delete(key: _kWrappingKeyStorageKey);
     await _secure.delete(key: _kBioUnlockSecretKey);
+    await _secure.delete(key: _kBioPasswordKey);
   }
 
   /// Development fallback when zunia_core is unavailable: seal plaintext phrase.

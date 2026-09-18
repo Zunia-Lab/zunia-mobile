@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:zunia_mobile/screens/networks_screen.dart';
+import 'package:zunia_mobile/browser/dapp_browser_store.dart';
+import 'package:zunia_mobile/screens/dapp_browser_screen.dart';
 import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
+import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
 import 'package:zunia_mobile/widgets/wallet_header.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// dApp launcher. Sites open in the system browser and pair back over
-/// WalletConnect, so no in-app webview ever sees the keys.
+/// Ecosystem catalog + entry into the in-app wallet browser.
 class BrowserTab extends ConsumerStatefulWidget {
   const BrowserTab({super.key});
 
@@ -48,16 +48,16 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
       meta: 'Liquid staking',
     ),
     (
+      name: 'Skip',
+      category: 'Bridge',
+      url: 'https://go.skip.build',
+      meta: 'IBC bridge',
+    ),
+    (
       name: 'Mintscan',
       category: 'Tools',
       url: 'https://www.mintscan.io',
       meta: 'Explorer',
-    ),
-    (
-      name: 'IBC transfer',
-      category: 'Bridge',
-      url: 'https://go.skip.build',
-      meta: 'Bridge',
     ),
   ];
 
@@ -66,6 +66,14 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
   final _search = TextEditingController();
   String _query = '';
   String _category = 'All';
+  List<BrowserBookmark> _recents = const [];
+  List<BrowserBookmark> _favorites = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLists();
+  }
 
   @override
   void dispose() {
@@ -73,15 +81,24 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
     super.dispose();
   }
 
-  Future<void> _launch(String url) async {
-    final uri = Uri.parse(url);
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open $url')),
-      );
-    }
+  Future<void> _loadLists() async {
+    final recents = await DappBrowserStore.instance.recents();
+    final favorites = await DappBrowserStore.instance.favorites();
+    if (!mounted) return;
+    setState(() {
+      _recents = recents;
+      _favorites = favorites;
+    });
   }
+
+  Future<void> _open(String url, {String? title}) async {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return;
+    await DappBrowserScreen.open(context, url: trimmed, title: title);
+    if (mounted) await _loadLists();
+  }
+
+  Future<void> _openQuery() => _open(_query);
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +115,7 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
         })
         .toList();
     final featured = _apps.first;
+    final showUrlHint = _query.contains('.') || _query.startsWith('http');
 
     return DecoratedBox(
       decoration: BoxDecoration(gradient: s.screenGradient),
@@ -111,12 +129,12 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
           ),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+              padding: const EdgeInsets.fromLTRB(18, 4, 18, 16),
               children: [
                 Row(
                   children: [
                     Text(
-                      'Ecosystem',
+                      'Browser',
                       style: zuniaSans(
                         fontSize: 17,
                         fontWeight: FontWeight.w500,
@@ -126,11 +144,13 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                     ),
                     const Spacer(),
                     SizedBox(
-                      width: 148,
+                      width: 168,
                       child: ZuniaSearchField(
                         controller: _search,
-                        hintText: 'Search',
+                        hintText: 'Search or URL',
+                        textInputAction: TextInputAction.go,
                         onChanged: (v) => setState(() => _query = v),
+                        onSubmitted: (_) => _openQuery(),
                       ),
                     ),
                   ],
@@ -155,14 +175,23 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'FEATURED PROJECT',
+                        'WALLET BROWSER',
                         style: zuniaMono(
                           fontSize: 9.5,
                           letterSpacing: 1.3,
                           color: s.fgMuted,
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Open a dApp inside Zunia. Connect with one tap. Keys never leave the wallet.',
+                        style: zuniaSans(
+                          fontSize: 13.5,
+                          height: 1.35,
+                          color: s.fg,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       Row(
                         children: [
                           Container(
@@ -208,7 +237,10 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                           Material(
                             color: Colors.transparent,
                             child: InkWell(
-                              onTap: () => _launch(featured.url),
+                              onTap: () => _open(
+                                featured.url,
+                                title: featured.name,
+                              ),
                               borderRadius: BorderRadius.circular(999),
                               child: Ink(
                                 decoration: BoxDecoration(
@@ -250,9 +282,8 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                             ),
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(999),
-                              gradient: _category == cat
-                                  ? s.accentGradient
-                                  : null,
+                              gradient:
+                                  _category == cat ? s.accentGradient : null,
                               color: _category == cat ? null : s.glass,
                             ),
                             child: Text(
@@ -285,12 +316,49 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                     await showDappConnectSheet(context, uri: uri);
                   },
                 ),
+                if (_favorites.isNotEmpty) ...[
+                  const SizedBox(height: 18),
+                  Text(
+                    'Favorites',
+                    style: zuniaSans(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: s.fgMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final b in _favorites.take(6))
+                    _AppRow(
+                      name: b.title,
+                      meta: Uri.tryParse(b.url)?.host ?? b.url,
+                      onTap: () => _open(b.url, title: b.title),
+                    ),
+                ],
+                if (_recents.isNotEmpty && _query.isEmpty) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    'Recent',
+                    style: zuniaSans(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: s.fgMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final b in _recents.take(5))
+                    _AppRow(
+                      name: b.title,
+                      meta: Uri.tryParse(b.url)?.host ?? b.url,
+                      onTap: () => _open(b.url, title: b.title),
+                    ),
+                ],
                 const SizedBox(height: 14),
-                if (_query.startsWith('http'))
+                if (showUrlHint)
                   _AppRow(
-                    name: _query,
-                    meta: 'Open in browser',
-                    onTap: () => _launch(_query),
+                    name: normalizeBrowserUrl(_query.trim()),
+                    meta: 'Opens inside Zunia',
+                    accentAction: true,
+                    onTap: _openQuery,
                   )
                 else
                   for (final app in rows)
@@ -301,17 +369,8 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                         name: app.name,
                         meta: '${app.meta} · ${app.category}',
                         raised: app.name == featured.name,
-                        onTap: () => _launch(app.url),
+                        onTap: () => _open(app.url, title: app.name),
                       ),
-                const SizedBox(height: 12),
-                const ZuniaCallout(
-                  tone: ZuniaCalloutTone.info,
-                  title: 'Sites open outside the wallet',
-                  body:
-                      'Zunia has no in-app webview. dApps run in your system '
-                      'browser and request signatures over WalletConnect, which '
-                      'you approve here.',
-                ),
               ],
             ),
           ),
@@ -327,12 +386,14 @@ class _AppRow extends StatelessWidget {
     required this.meta,
     required this.onTap,
     this.raised = false,
+    this.accentAction = false,
   });
 
   final String name;
   final String meta;
   final VoidCallback onTap;
   final bool raised;
+  final bool accentAction;
 
   @override
   Widget build(BuildContext context) {
@@ -348,7 +409,10 @@ class _AppRow extends StatelessWidget {
           child: Ink(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(13),
-              gradient: raised ? s.surfaceRaisedGradient : null,
+              gradient: raised || accentAction ? s.surfaceRaisedGradient : null,
+              border: accentAction
+                  ? Border.all(color: s.accent.withValues(alpha: 0.45))
+                  : null,
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
@@ -362,9 +426,12 @@ class _AppRow extends StatelessWidget {
                       borderRadius: BorderRadius.circular(10),
                       color: s.glass2,
                     ),
-                    child: Text(
-                      name.characters.first.toUpperCase(),
-                      style: zuniaMono(fontSize: 11, color: s.fg),
+                    child: Icon(
+                      accentAction
+                          ? Icons.language_rounded
+                          : Icons.apps_rounded,
+                      size: 15,
+                      color: accentAction ? s.accent : s.fg,
                     ),
                   ),
                   const SizedBox(width: 11),
@@ -391,8 +458,11 @@ class _AppRow extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    'Open',
-                    style: zuniaMono(fontSize: 9.5, color: s.fgMuted),
+                    accentAction ? 'Open' : 'Open',
+                    style: zuniaMono(
+                      fontSize: 9.5,
+                      color: accentAction ? s.accent : s.fgMuted,
+                    ),
                   ),
                 ],
               ),

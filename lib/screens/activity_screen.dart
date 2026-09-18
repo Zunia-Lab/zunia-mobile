@@ -5,6 +5,7 @@ import 'package:zunia_mobile/services/chain_client.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/util/amounts.dart';
+import 'package:zunia_mobile/screens/tx_detail_screen.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// Transfers and signatures across every enabled chain, grouped by day.
@@ -232,7 +233,14 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
       children.add(
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-          child: Row(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => TxDetailScreen(item: row)),
+              ),
+              borderRadius: BorderRadius.circular(12),
+              child: Row(
             children: [
               Container(
                 width: 32,
@@ -306,6 +314,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 ],
               ),
             ],
+          ),
+            ),
           ),
         ),
       );

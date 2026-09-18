@@ -41,7 +41,9 @@ class _ChainDetailScreenState extends ConsumerState<ChainDetailScreen> {
 
     if (account == null) {
       return Scaffold(
+        backgroundColor: Colors.transparent,
         body: SafeArea(
+          bottom: false,
           child: ZuniaScreenScaffold(
             title: widget.chainId,
             onBack: () => Navigator.of(context).pop(),
@@ -67,7 +69,9 @@ class _ChainDetailScreenState extends ConsumerState<ChainDetailScreen> {
     final heroAmount = amount(balance?.available);
 
     return Scaffold(
+      backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: chain.coinDenom,
           onBack: () => Navigator.of(context).pop(),

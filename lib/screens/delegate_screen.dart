@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/chains/chain_catalog.dart';
+import 'package:zunia_mobile/crypto/amino_tx.dart';
+import 'package:zunia_mobile/services/wallet_tx_service.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/util/amounts.dart';
+import 'package:zunia_mobile/widgets/transfer_sent_sheet.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// Delegate form for one validator. Signing stays off-device until a broadcast
-/// endpoint is wired, so Review only validates the amount locally.
+/// Delegate form for one validator.
 class DelegateScreen extends ConsumerStatefulWidget {
   const DelegateScreen({
     super.key,
@@ -59,6 +62,7 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
       return Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
+          bottom: false,
           child: ZuniaScreenScaffold(
             title: 'Delegate',
             onBack: () => Navigator.of(context).pop(),
@@ -91,6 +95,7 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Delegate',
           onBack: () => Navigator.of(context).pop(),
@@ -100,7 +105,12 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
                 : 'Enter an amount',
             size: ZuniaButtonSize.lg,
             onPressed: ready
-                ? () => _review(chain.coinDenom, account.address)
+                ? () => _review(
+                      chain.coinDenom,
+                      account.address,
+                      chain.coinDecimals,
+                      chain.coinMinimalDenom,
+                    )
                 : null,
           ),
           body: ListView(
@@ -289,61 +299,120 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
     );
   }
 
-  void _review(String denom, String from) {
+  void _review(String denom, String from, int decimals, String minimalDenom) {
     final s = ZuniaSemanticsExt.of(context);
+    var busy = false;
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        decoration: BoxDecoration(
-          gradient: s.sheetGradient,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          border: Border(top: BorderSide(color: s.line)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Review delegation',
-                style: zuniaSans(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: -0.3,
-                  color: s.fg,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSheet) => Container(
+          decoration: BoxDecoration(
+            gradient: s.sheetGradient,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            border: Border(top: BorderSide(color: s.line)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Review delegation',
+                  style: zuniaSans(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -0.3,
+                    color: s.fg,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 18),
-              ZuniaKeyValueRow(
-                label: 'Validator',
-                value: widget.moniker,
-              ),
-              const SizedBox(height: 12),
-              ZuniaKeyValueRow(
-                label: 'Amount',
-                value: '${_amount.text.trim()} $denom',
-              ),
-              const SizedBox(height: 12),
-              ZuniaKeyValueRow(label: 'From', value: truncateAddress(from)),
-              const SizedBox(height: 18),
-              const ZuniaCallout(
-                tone: ZuniaCalloutTone.warning,
-                title: 'Nothing is broadcast',
-                body:
-                    'This wallet has no broadcast endpoint configured, so the '
-                    'delegation stops here.',
-              ),
-              const SizedBox(height: 16),
-              ZuniaButton(
-                label: 'Close',
-                variant: ZuniaButtonVariant.secondary,
-                size: ZuniaButtonSize.lg,
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
+                const SizedBox(height: 18),
+                ZuniaKeyValueRow(
+                  label: 'Validator',
+                  value: widget.moniker,
+                ),
+                const SizedBox(height: 12),
+                ZuniaKeyValueRow(
+                  label: 'Amount',
+                  value: '${_amount.text.trim()} $denom',
+                ),
+                const SizedBox(height: 12),
+                ZuniaKeyValueRow(label: 'From', value: truncateAddress(from)),
+                const SizedBox(height: 18),
+                ZuniaButton(
+                  label: busy ? 'Signing…' : 'Sign and broadcast',
+                  size: ZuniaButtonSize.lg,
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          final phrase = ref.read(phraseProvider);
+                          final wallet = ref.read(walletProvider);
+                          final chain =
+                              ChainCatalog.instance.find(widget.chainId);
+                          final account = wallet.active;
+                          final units =
+                              toBaseUnits(_amount.text.trim(), decimals);
+                          if (phrase == null ||
+                              chain == null ||
+                              account == null ||
+                              units == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Unlock wallet and enter amount'),
+                              ),
+                            );
+                            return;
+                          }
+                          setSheet(() => busy = true);
+                          try {
+                            final hash =
+                                await WalletTxService.instance.signAndBroadcast(
+                              phrase: phrase,
+                              chain: chain,
+                              signerAddress: from,
+                              accountIndex: account.index,
+                              msgs: [
+                                msgDelegate(
+                                  delegatorAddress: from,
+                                  validatorAddress: widget.operatorAddress,
+                                  amount: (
+                                    denom: minimalDenom,
+                                    amount: units,
+                                  ),
+                                ),
+                              ],
+                            );
+                            if (!mounted) return;
+                            if (ctx.mounted) Navigator.of(ctx).pop();
+                            await showTransferSent(
+                              context,
+                              txHash: hash,
+                              title: 'Delegation sent',
+                              onDone: () {
+                                if (mounted) Navigator.of(context).pop();
+                              },
+                            );
+                          } catch (err) {
+                            setSheet(() => busy = false);
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('$err')),
+                            );
+                          }
+                        },
+                ),
+                const SizedBox(height: 8),
+                ZuniaButton(
+                  label: 'Close',
+                  variant: ZuniaButtonVariant.secondary,
+                  size: ZuniaButtonSize.lg,
+                  onPressed: () => Navigator.of(ctx).pop(),
+                ),
+              ],
+            ),
           ),
         ),
       ),

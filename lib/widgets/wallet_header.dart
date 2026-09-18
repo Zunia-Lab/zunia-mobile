@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/widgets/network_switcher_sheet.dart';
 import 'package:zunia_mobile/widgets/wallet_switcher_sheet.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
@@ -10,6 +11,7 @@ import 'package:zunia_ui/zunia_ui.dart';
 class WalletHeader extends ConsumerWidget {
   const WalletHeader({super.key, required this.onOpenNetworks});
 
+  /// Full networks manager (long-press fallback from the chip sheet's Manage).
   final VoidCallback onOpenNetworks;
 
   @override
@@ -23,7 +25,11 @@ class WalletHeader extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(16, 10, 8, 6),
       child: Row(
         children: [
-          Flexible(
+          // Expanded, not Flexible-plus-Spacer: with a Spacer in the row every
+          // flexible child takes an equal share of the free space, which handed
+          // the two chips a third of the width each and clipped both at 320dp.
+          // One expanding child absorbs the slack and pushes the rest right.
+          Expanded(
             child: DecoratedBox(
               decoration: BoxDecoration(
                 gradient: s.surfaceRaisedGradient,
@@ -42,11 +48,22 @@ class WalletHeader extends ConsumerWidget {
           ZuniaNetworkChip(
             label: 'Mainnet',
             count: wallet.enabledChainIds.length,
-            onTap: onOpenNetworks,
+            onTap: () {
+              if (wallet.enabledChainIds.isEmpty) {
+                onOpenNetworks();
+              } else {
+                showNetworkSwitcher(context);
+              }
+            },
           ),
-          const Spacer(),
+          const SizedBox(width: 4),
           IconButton(
             tooltip: prefs.hideAmounts ? 'Show amounts' : 'Hide amounts',
+            // 40x40 still clears the 40dp touch target minimum; the default 48
+            // plus its padding is what pushed the row over the edge.
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
             onPressed: () =>
                 ref.read(preferencesProvider.notifier).toggleHideAmounts(),
             icon: Icon(
@@ -59,6 +76,9 @@ class WalletHeader extends ConsumerWidget {
           ),
           IconButton(
             tooltip: 'Menu',
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
             onPressed: Scaffold.of(context).openEndDrawer,
             icon: Icon(Icons.menu, size: 20, color: s.fg),
           ),

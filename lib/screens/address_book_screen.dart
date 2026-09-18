@@ -91,6 +91,7 @@ class AddressBookScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
+        bottom: false,
         child: ZuniaScreenScaffold(
           title: pickMode ? 'Pick recipient' : 'Address book',
           onBack: () => Navigator.of(context).pop(),
