@@ -127,15 +127,16 @@ class SettingsScreen extends ConsumerWidget {
                   ),
                   SettingsRow(
                     title: 'Zunia Connect',
-                    description: native.isConnected
-                        ? 'Wallet peer connected'
-                        : 'WS ${kConnectWsPublicUrl.replaceFirst(RegExp(r'^wss?://'), '')}',
+                    description: 'End-to-end encrypted through '
+                        '${Uri.parse(kDefaultConnectRelay).host}',
                     leading: const Icon(Icons.wifi_tethering),
                     trailing: Text(
-                      native.isConnected ? 'live' : 'idle',
+                      native.activeSessions.isEmpty
+                          ? 'idle'
+                          : '${native.activeSessions.length} connected',
                       style: zuniaMono(
                         fontSize: 10.5,
-                        color: native.isConnected ? s.info : s.fgMuted,
+                        color: native.activeSessions.isEmpty ? s.fgMuted : s.info,
                       ),
                     ),
                   ),

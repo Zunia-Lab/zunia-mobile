@@ -20,8 +20,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
   @override
   void initState() {
     super.initState();
-    _nativeSub =
-        ref.read(nativeConnectProvider).sessionsChanged.listen((_) {
+    _nativeSub = ref.read(nativeConnectProvider).changes.listen((_) {
       if (mounted) setState(() => _tick++);
     });
   }
@@ -56,8 +55,8 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 28),
                   child: Text(
-                    'No active sessions. Pair a dApp with WalletConnect or '
-                    'open a zunia://connect link.',
+                    'No connected apps. Scan a site\'s Zunia Connect code, '
+                    'or pair with WalletConnect.',
                     style: zuniaSans(
                       fontSize: 13,
                       height: 1.55,
@@ -86,9 +85,11 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                 for (final session in nativeSessions)
                   _SessionTile(
                     name: session.name,
-                    meta:
-                        '${session.url}\n${session.chains.take(2).join(', ')}',
-                    badge: 'ZS',
+                    meta: '${session.dapp.host}'
+                        '${session.dapp.verifiedOrigin == null ? ' (origin unknown)' : ''}'
+                        ' · ${session.online ? 'online' : 'offline'}\n'
+                        '${session.chains.take(2).join(', ')}',
+                    badge: 'ZC',
                     onDisconnect: () async {
                       await native.disconnectSession(session.sessionId);
                       if (mounted) setState(() => _tick++);

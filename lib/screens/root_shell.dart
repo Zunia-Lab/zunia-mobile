@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/connect/wallet_signer.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
 import 'package:zunia_mobile/screens/address_book_screen.dart';
 import 'package:zunia_mobile/screens/bridge_screen.dart';
 import 'package:zunia_mobile/screens/governance_screen.dart';
+import 'package:zunia_mobile/screens/native_request_sheets.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/notifications_screen.dart';
@@ -48,6 +50,7 @@ class _RootShellState extends ConsumerState<RootShell> {
 
   String _tab = 'home';
   final _subs = <StreamSubscription<dynamic>>[];
+  ProviderSubscription<int?>? _accountSub;
   bool _sheetOpen = false;
 
   @override
@@ -57,14 +60,21 @@ class _RootShellState extends ConsumerState<RootShell> {
   }
 
   void _listenConnect() {
+    if (!mounted) return;
     final native = ref.read(nativeConnectProvider);
     final wc = ref.read(walletConnectProvider);
     final deep = ref.read(deepLinkHandlerProvider);
 
-    _subs.add(native.pendingConnectRequests.listen(_onNativeConnect));
-    _subs.add(native.pendingSignRequests.listen(_onNativeSign));
+    _subs.add(native.changes.listen((_) => _showNextNativeRequest()));
+    _subs.add(native.notices.listen(_onNativeNotice));
     _subs.add(wc.sessionProposals.listen(_onWcProposal));
     _subs.add(deep.links.listen(_onDeepLink));
+    _accountSub = ref.listenManual<int?>(
+      walletProvider.select((w) => w.active?.index),
+      _onAccountChanged,
+    );
+    // Requests that arrived while the wallet was locked.
+    _showNextNativeRequest();
   }
 
   Future<void> _onDeepLink(Uri uri) async {
@@ -74,27 +84,55 @@ class _RootShellState extends ConsumerState<RootShell> {
     await DappBrowserScreen.open(context, url: dappUrl);
   }
 
-  Future<void> _onNativeConnect(NativeConnectRequest request) async {
-    if (!mounted || _sheetOpen) return;
-    _sheetOpen = true;
-    try {
-      await showDappConnectSheet(
-        context,
-        offer: DappConnectOffer.fromNative(request),
-      );
-    } finally {
-      _sheetOpen = false;
-    }
+  void _onNativeNotice(NativeConnectNotice notice) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(notice.message)),
+    );
   }
 
-  Future<void> _onNativeSign(NativeSignRequest request) async {
+  /// Shows what sites asked for, one sheet at a time, oldest first.
+  Future<void> _showNextNativeRequest() async {
     if (!mounted || _sheetOpen) return;
+    final native = ref.read(nativeConnectProvider);
+    final pending = native.pendingRequests;
+    if (pending.isEmpty) return;
+    final request = pending.first;
     _sheetOpen = true;
     try {
-      await showNativeSignSheet(context, request: request);
+      switch (request) {
+        case NativeConnectRequest():
+          await showNativeConnectSheet(context, request: request);
+          // Dismissed without a choice: that is a no.
+          if (native.isPending(request)) await native.rejectConnect(request);
+        case NativeSignRequest():
+          await showNativeSignSheet(context, request: request);
+          if (native.isPending(request)) await native.rejectSign(request);
+      }
+    } catch (e) {
+      debugPrint('native request: $e');
     } finally {
       _sheetOpen = false;
     }
+    unawaited(_showNextNativeRequest());
+  }
+
+  void _onAccountChanged(int? previous, int? next) {
+    if (next == null || previous == null || previous == next) return;
+    final phrase = ref.read(phraseProvider);
+    if (phrase == null) return;
+    final name = ref.read(walletProvider).active?.name;
+    unawaited(
+      ref.read(nativeConnectProvider).switchAccount(
+            accountIndex: next,
+            accountsFor: (chainIds) => connectAccountsFor(
+              phrase: phrase,
+              accountIndex: next,
+              chainIds: chainIds,
+              accountName: name,
+            ),
+          ),
+    );
   }
 
   Future<void> _onWcProposal(WcSessionProposal proposal) async {
@@ -108,6 +146,7 @@ class _RootShellState extends ConsumerState<RootShell> {
     } finally {
       _sheetOpen = false;
     }
+    unawaited(_showNextNativeRequest());
   }
 
   @override
@@ -115,6 +154,7 @@ class _RootShellState extends ConsumerState<RootShell> {
     for (final sub in _subs) {
       sub.cancel();
     }
+    _accountSub?.close();
     super.dispose();
   }
 
@@ -154,16 +194,9 @@ class _RootShellState extends ConsumerState<RootShell> {
                 .push<String>(
               MaterialPageRoute(builder: (_) => const QrScannerScreen()),
             )
-                .then((uri) {
-              if (!context.mounted || uri == null || uri.isEmpty) return;
-              final parsed = Uri.tryParse(uri);
-              if (parsed != null &&
-                  NativeConnectService.parseConnectLink(parsed) != null) {
-                // Native handshake emits pendingConnectRequests → sheet.
-                ref.read(nativeConnectProvider).connectFromDeepLink(parsed);
-                return;
-              }
-              showDappConnectSheet(context, uri: uri);
+                .then((code) {
+              if (!context.mounted || code == null || code.isEmpty) return;
+              handleScannedCode(context, ref, code);
             });
           },
           onSessions: () => _fromDrawer(const SessionsScreen()),

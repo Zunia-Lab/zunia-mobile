@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "about": "Cosmos signatures produced by CosmJS 0.39 (Secp256k1HdWallet.signAmino and DirectSecp256k1HdWallet.signDirect) from a public test mnemonic. The Dart wallet must produce the same sign bytes and the same signatures. Keys: m/44'/118'/<account>'/0/0. ADR-036 documents are signed with signAmino.",
+  "mnemonic": "enlist hip relief stomach skate base shallow young switch frequent cry park",
+  "accounts": [
+    {
+      "coinType": 118,
+      "accountIndex": 0,
+      "prefix": "cosmos",
+      "address": "cosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada",
+      "pubKey": "A9cXhWb8ZpqCzkA8dQCPV29KdeRLV3rUYxrkHudLbQtS"
+    },
+    {
+      "coinType": 118,
+      "accountIndex": 1,
+      "prefix": "cosmos",
+      "address": "cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr",
+      "pubKey": "A7bloNpml+8/p3GJGUv40FlkmNnKKrA6QLlR3FPhHdcb"
+    },
+    {
+      "coinType": 118,
+      "accountIndex": 0,
+      "prefix": "osmo",
+      "address": "osmo14qemq0vw6y3gc3u3e0aty2e764u4gs5l32ydm0",
+      "pubKey": "A9cXhWb8ZpqCzkA8dQCPV29KdeRLV3rUYxrkHudLbQtS"
+    }
+  ],
+  "amino": [
+    {
+      "name": "send with a memo that needs escaping",
+      "signer": "cosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada",
+      "signDoc": {
+        "chain_id": "cosmoshub-4",
+        "account_number": "42",
+        "sequence": "7",
+        "fee": {
+          "amount": [
+            {
+              "denom": "uatom",
+              "amount": "5000"
+            }
+          ],
+          "gas": "200000"
+        },
+        "msgs": [
+          {
+            "type": "cosmos-sdk/MsgSend",
+            "value": {
+              "from_address": "cosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada",
+              "to_address": "cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr",
+              "amount": [
+                {
+                  "denom": "uatom",
+                  "amount": "1234"
+                }
+              ]
+            }
+          }
+        ],
+        "memo": "a&b <script> été ☃"
+      },
+      "signBytes": "{\"account_number\":\"42\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[{\"amount\":\"5000\",\"denom\":\"uatom\"}],\"gas\":\"200000\"},\"memo\":\"a\\u0026b \\u003cscript\\u003e été ☃\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgSend\",\"value\":{\"amount\":[{\"amount\":\"1234\",\"denom\":\"uatom\"}],\"from_address\":\"cosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada\",\"to_address\":\"cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr\"}}],\"sequence\":\"7\"}",
+      "signature": "Y861oy+nGandIZdUPMfC2HRQ0IXiO+4nVzEO2SWWjvc4Xz+d+crptseOQWYutHpY8LsXk5B4TM2QeaDjeMo+Rw=="
+    },
+    {
+      "name": "second account, keys out of order",
+      "signer": "cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr",
+      "signDoc": {
+        "sequence": "0",
+        "msgs": [
+          {
+            "value": {
+              "validator_address": "cosmosvaloper1sjllsnramtg3ewxqwwrwjxfgc4n4ef9u2lcnj0",
+              "delegator_address": "cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr",
+              "amount": {
+                "amount": "1000000",
+                "denom": "uatom"
+              }
+            },
+            "type": "cosmos-sdk/MsgDelegate"
+          }
+        ],
+        "memo": "",
+        "fee": {
+          "gas": "250000",
+          "amount": []
+        },
+        "chain_id": "cosmoshub-4",
+        "account_number": "0"
+      },
+      "signBytes": "{\"account_number\":\"0\",\"chain_id\":\"cosmoshub-4\",\"fee\":{\"amount\":[],\"gas\":\"250000\"},\"memo\":\"\",\"msgs\":[{\"type\":\"cosmos-sdk/MsgDelegate\",\"value\":{\"amount\":{\"amount\":\"1000000\",\"denom\":\"uatom\"},\"delegator_address\":\"cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr\",\"validator_address\":\"cosmosvaloper1sjllsnramtg3ewxqwwrwjxfgc4n4ef9u2lcnj0\"}}],\"sequence\":\"0\"}",
+      "signature": "GvOe2GfpCYYKhSD0SqUoudMymi8YqJ91mU4qgqIFP5EfsM8Fkp5Ef4jHib1mw1xOyEIgUjA2MfIoK7Ji5/ZAAg=="
+    }
+  ],
+  "direct": [
+    {
+      "name": "send",
+      "signer": "cosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada",
+      "signDoc": {
+        "bodyBytes": "Co8BChwvY29zbW9zLmJhbmsudjFiZXRhMS5Nc2dTZW5kEm8KLWNvc21vczE0cWVtcTB2dzZ5M2djM3UzZTBhdHkyZTc2NHU0Z3M1bGUzaGFkYRItY29zbW9zMW5ocDIzYXQzNWUyY2Y4YzdnYW1mMnl5Z3kzZG5sZDV3anNkc3NyGg8KBXVvc21vEgYyNTAwMDASD2RpcmVjdCAmIDxtZW1vPg==",
+        "authInfoBytes": "ClAKRgofL2Nvc21vcy5jcnlwdG8uc2VjcDI1NmsxLlB1YktleRIjCiED1xeFZvxmmoLOQDx1AI9Xb0p15EtXetRjGuQe50ttC1ISBAoCCAEYAxITCg0KBXVvc21vEgQ2MjUwEJChDw==",
+        "chainId": "osmo-test-5",
+        "accountNumber": "123456"
+      },
+      "signBytes": "0aa3010a8f010a1c2f636f736d6f732e62616e6b2e763162657461312e4d736753656e64126f0a2d636f736d6f73313471656d7130767736793367633375336530617479326537363475346773356c653368616461122d636f736d6f73316e68703233617433356532636638633767616d66327979677933646e6c6435776a73647373721a0f0a05756f736d6f1206323530303030120f6469726563742026203c6d656d6f3e12670a500a460a1f2f636f736d6f732e63727970746f2e736563703235366b312e5075624b657912230a2103d7178566fc669a82ce403c75008f576f4a75e44b577ad4631ae41ee74b6d0b5212040a020801180312130a0d0a05756f736d6f1204363235301090a10f1a0b6f736d6f2d746573742d3520c0c407",
+      "signature": "7zds4QtxZb1cv3hX6arUpcBxCKU/JzzpXRPzirDr2ExzPNtQjn0frsaLOBgTj2MRzE3pw3vpN7Ygfoo1jcX8/g==",
+      "summary": {
+        "messages": [
+          "/cosmos.bank.v1beta1.MsgSend"
+        ],
+        "memo": "direct & <memo>",
+        "fee": [
+          {
+            "denom": "uosmo",
+            "amount": "6250"
+          }
+        ],
+        "gas": "250000"
+      }
+    },
+    {
+      "name": "account number zero and two messages",
+      "signer": "cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr",
+      "signDoc": {
+        "bodyBytes": "CpgBCiMvY29zbW9zLnN0YWtpbmcudjFiZXRhMS5Nc2dEZWxlZ2F0ZRJxCi1jb3Ntb3MxbmhwMjNhdDM1ZTJjZjhjN2dhbWYyeXlneTNkbmxkNXdqc2Rzc3ISNGNvc21vc3ZhbG9wZXIxc2psbHNucmFtdGczZXd4cXd3cndqeGZnYzRuNGVmOXUybGNuajAaCgoFdWF0b20SATEKigEKHC9jb3Ntb3MuYmFuay52MWJldGExLk1zZ1NlbmQSagotY29zbW9zMW5ocDIzYXQzNWUyY2Y4YzdnYW1mMnl5Z3kzZG5sZDV3anNkc3NyEi1jb3Ntb3MxNHFlbXEwdnc2eTNnYzN1M2UwYXR5MmU3NjR1NGdzNWxlM2hhZGEaCgoFdWF0b20SATI=",
+        "authInfoBytes": "EgQQ4KcS",
+        "chainId": "cosmoshub-4",
+        "accountNumber": "0"
+      },
+      "signBytes": "0aa8020a98010a232f636f736d6f732e7374616b696e672e763162657461312e4d736744656c656761746512710a2d636f736d6f73316e68703233617433356532636638633767616d66327979677933646e6c6435776a73647373721234636f736d6f7376616c6f70657231736a6c6c736e72616d74673365777871777772776a78666763346e3465663975326c636e6a301a0a0a057561746f6d1201310a8a010a1c2f636f736d6f732e62616e6b2e763162657461312e4d736753656e64126a0a2d636f736d6f73316e68703233617433356532636638633767616d66327979677933646e6c6435776a7364737372122d636f736d6f73313471656d7130767736793367633375336530617479326537363475346773356c6533686164611a0a0a057561746f6d1201321206120410e0a7121a0b636f736d6f736875622d34",
+      "signature": "JF0/ANMLTK7AahU0vziQkhnNUyIRxrWeNwQ7y5NgL7F7ftJ+vCqXvub8DERG4NF4mvcjay2z96Hzh4IF+mZq+g==",
+      "summary": {
+        "messages": [
+          "/cosmos.staking.v1beta1.MsgDelegate",
+          "/cosmos.bank.v1beta1.MsgSend"
+        ],
+        "memo": "",
+        "fee": [],
+        "gas": "300000"
+      }
+    }
+  ],
+  "adr36": [
+    {
+      "name": "sign-in message",
+      "signer": "cosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada",
+      "data": "app.example.com wants you to sign in with your Cosmos account:\ncosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada\n\nURI: https://app.example.com\nVersion: 1\nChain ID: cosmoshub-4\nNonce: 8f3k2m9QxZ\nIssued At: 2026-09-24T10:00:00.000Z",
+      "encoding": "utf8",
+      "signature": "pOxEqz3svAh/keTv9E6tJ//QZMgYW3USsaLUsGudkkFjdO8GnCois+ZjWcZX0CoQozxhtaVBLcEnDmkmvDc1pA=="
+    },
+    {
+      "name": "text with characters that need escaping",
+      "signer": "cosmos14qemq0vw6y3gc3u3e0aty2e764u4gs5le3hada",
+      "data": "Tom & Jerry <3 café",
+      "encoding": "utf8",
+      "signature": "mJC3c5fSNlSO1gBiiDzp0YtO9b1IC7eUbxyZSr4JWPMGkHOs2Nb3O8Zt4c//QU4GC+0K4JxoQl6+R4QCWS/+Uw=="
+    },
+    {
+      "name": "raw bytes",
+      "signer": "cosmos1nhp23at35e2cf8c7gamf2yygy3dnld5wjsdssr",
+      "data": "AAEC+vv8/f7/",
+      "encoding": "base64",
+      "signature": "7UhDHwG6y1L8V3u7XGTEe7FKrJ/VJ5rnU/LdajJNwcMjAJ9WnWE0FtIs49g7GPzeTxAnmnqkQE+8mxk1ifX+YA=="
+    }
+  ]
+}

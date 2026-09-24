@@ -5,6 +5,9 @@
 /// pairing uses [NativeConnectService].
 library;
 
+import 'package:flutter/foundation.dart';
+import 'package:zunia_mobile/connect/pairing_uri.dart';
+
 /// WalletConnect Cloud project id from `--dart-define=WALLETCONNECT_PROJECT_ID=...`
 const String kWalletConnectProjectId = String.fromEnvironment(
   'WALLETCONNECT_PROJECT_ID',
@@ -51,49 +54,28 @@ const bool kRequireTxPreview = true;
 const bool kStrictNamespace = true;
 const bool kCleartextTrafficAllowed = false;
 
-/// Public WebSocket base for native connect (no trailing slash).
-/// Override with `--dart-define=CONNECT_WS_PUBLIC_URL=wss://api.example`.
-const String kConnectWsPublicUrl = String.fromEnvironment(
-  'CONNECT_WS_PUBLIC_URL',
-  defaultValue: 'ws://localhost:8788',
-);
+/// The relay the Zunia SDK pairs through by default.
+const String kDefaultConnectRelay = 'wss://api.zunialab.com';
 
-/// HTTP API base for native connect session lookup.
-/// Override with `--dart-define=ZUNIA_CONNECT_API_BASE=https://api.example`.
-/// When empty, derived from [kConnectWsPublicUrl].
-const String kConnectApiBase = String.fromEnvironment(
-  'ZUNIA_CONNECT_API_BASE',
-  defaultValue: '',
-);
+/// A self-hosted relay, e.g. for development:
+/// `--dart-define=CONNECT_WS_PUBLIC_URL=ws://192.168.1.10:8788`.
+const String kConnectWsPublicUrl = String.fromEnvironment('CONNECT_WS_PUBLIC_URL');
 
-const String kConnectProtocolVersion = 'zunia.connect.v1';
-const String kConnectWsPath = '/v1/connect/ws';
-const String kConnectHttpPath = '/v1/connect/sessions';
-const int kConnectPairedTtlSeconds = 86400;
+/// More relays to trust, comma separated:
+/// `--dart-define=ZUNIA_CONNECT_TRUSTED_RELAYS=wss://relay.example.com`.
+const String kExtraTrustedRelays =
+    String.fromEnvironment('ZUNIA_CONNECT_TRUSTED_RELAYS');
 
-/// Resolved HTTP origin for session create/get/delete.
-String connectApiBaseUrl() {
-  final explicit = kConnectApiBase.trim();
-  if (explicit.isNotEmpty) return explicit.replaceAll(RegExp(r'/+$'), '');
-  final ws = kConnectWsPublicUrl.replaceAll(RegExp(r'/+$'), '');
-  if (ws.startsWith('wss://')) return 'https://${ws.substring(6)}';
-  if (ws.startsWith('ws://')) return 'http://${ws.substring(5)}';
-  return 'http://localhost:8788';
-}
+/// Relays the wallet pairs through. A relay tells the wallet which site
+/// created a session, so an untrusted relay could lie about it: codes that
+/// name any other relay are refused.
+List<String> trustedConnectRelays() => [
+      kDefaultConnectRelay,
+      for (final relay in kExtraTrustedRelays.split(','))
+        if (relay.trim().isNotEmpty) relay.trim(),
+      if (kConnectWsPublicUrl.trim().isNotEmpty) kConnectWsPublicUrl.trim(),
+    ];
 
-String connectWsBaseUrl() =>
-    kConnectWsPublicUrl.replaceAll(RegExp(r'/+$'), '');
-
-/// Wallet role WS URL for a pairing secret.
-String connectWalletWsUrl({
-  required String sessionId,
-  required String pairingSecret,
-}) {
-  final base = connectWsBaseUrl();
-  final sid = Uri.encodeComponent(sessionId);
-  final token = Uri.encodeComponent(pairingSecret);
-  return '$base$kConnectWsPath?sid=$sid&role=wallet&token=$token';
-}
-
-String connectSessionHttpUrl(String sessionId) =>
-    '${connectApiBaseUrl()}$kConnectHttpPath/${Uri.encodeComponent(sessionId)}';
+/// Debug builds also accept relays on this machine or the local network.
+RelayPolicy connectRelayPolicy() =>
+    RelayPolicy(trusted: trustedConnectRelays(), allowLocal: kDebugMode);

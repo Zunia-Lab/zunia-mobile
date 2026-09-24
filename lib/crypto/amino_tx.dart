@@ -4,6 +4,7 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:zunia_mobile/connect/cosmos_signing.dart';
 import 'package:zunia_mobile/crypto/proto_writer.dart';
 
 const signModeLegacyAminoJson = 127;
@@ -200,21 +201,7 @@ StdSignDoc makeStdSignDoc({
       sequence: sequence,
     );
 
-dynamic _sortKeysDeep(dynamic value) {
-  if (value is List) return value.map(_sortKeysDeep).toList();
-  if (value is Map) {
-    final keys = value.keys.map((k) => k.toString()).toList()..sort();
-    return {
-      for (final k in keys) k: _sortKeysDeep(value[k]),
-    };
-  }
-  return value;
-}
-
-Uint8List serializeAminoSignDoc(StdSignDoc doc) {
-  final sorted = _sortKeysDeep(doc.toJson());
-  return Uint8List.fromList(utf8.encode(jsonEncode(sorted)));
-}
+Uint8List serializeAminoSignDoc(StdSignDoc doc) => aminoSignBytes(doc.toJson());
 
 Uint8List _encodeCoin(Coin coin) =>
     ProtoWriter().string(1, coin.denom).string(2, coin.amount).intoBytes();

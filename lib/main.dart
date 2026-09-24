@@ -28,18 +28,28 @@ class ZuniaApp extends ConsumerStatefulWidget {
   ConsumerState<ZuniaApp> createState() => _ZuniaAppState();
 }
 
-class _ZuniaAppState extends ConsumerState<ZuniaApp> {
+class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver {
   final _navKey = GlobalKey<NavigatorState>();
   DeepLinkHandler? _deepLinks;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     Future.microtask(_bootstrap);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Sockets often die while the app is in the background.
+    if (state == AppLifecycleState.resumed) {
+      ref.read(nativeConnectProvider).resume();
+    }
   }
 
   Future<void> _bootstrap() async {
     await PushMessaging.init();
+    await ref.read(nativeConnectProvider).restore();
     _deepLinks = ref.read(deepLinkHandlerProvider);
     await _deepLinks!.start();
     final report = await DeviceIntegrity.check();
@@ -52,6 +62,7 @@ class _ZuniaAppState extends ConsumerState<ZuniaApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _deepLinks?.stop();
     super.dispose();
   }

@@ -4,13 +4,12 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:bip32/bip32.dart' as bip32;
-import 'package:bip39/bip39.dart' as bip39;
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/browser/dapp_browser_store.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
+import 'package:zunia_mobile/connect/cosmos_signing.dart';
+import 'package:zunia_mobile/connect/sign_in.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -214,6 +213,10 @@ class DappProviderBridge {
       throw Exception('Signer mismatch');
     }
 
+    if (signDocRaw is! Map || signDocRaw['chain_id'] != chainId) {
+      throw Exception('The document to sign is not for $chainId');
+    }
+
     if (!context.mounted) throw Exception('Browser closed');
     final approved = await _confirmSign(
       context,
@@ -225,23 +228,44 @@ class DappProviderBridge {
     );
     if (approved != true) throw Exception('Request rejected');
 
-    final signDocMap = Map<String, dynamic>.from(signDocRaw as Map);
-    final signature = _secp256k1SignSortedJson(
-      phrase: phrase,
+    final key = _signingKey(phrase, chain, account, signer);
+    return signAminoResult(key, Map<String, dynamic>.from(signDocRaw));
+  }
+
+  /// Chains with Ethermint keys (coin type 60) hash with Keccak, which this
+  /// signer does not do: their addresses do not match and the request is refused.
+  CosmosSigningKey _signingKey(
+    String phrase,
+    ChainEntry chain,
+    WalletAccount account,
+    String signer,
+  ) {
+    final key = CosmosKeyring(phrase).key(
       coinType: chain.coinType,
       accountIndex: account.index,
-      payload: signDocMap,
     );
-    return {
-      'signed': signDocMap,
-      'signature': {
-        'pub_key': {
-          'type': 'tendermint/PubKeySecp256k1',
-          'value': base64Encode(derived.publicKey),
-        },
-        'signature': base64Encode(signature),
-      },
-    };
+    if (key.address(chain.bech32Prefix) != signer) {
+      throw Exception('Signing for ${chain.chainName} accounts is not supported yet');
+    }
+    return key;
+  }
+
+  /// Keplr passes a string or a Uint8Array, which reaches the bridge as a
+  /// list or an index-keyed object.
+  Uint8List _arbitraryBytes(Object? data) {
+    if (data is String) return Uint8List.fromList(utf8.encode(data));
+    if (data is List && data.every((v) => v is int && v >= 0 && v < 256)) {
+      return Uint8List.fromList(data.cast<int>());
+    }
+    if (data is Map) {
+      final values = [
+        for (var i = 0; i < data.length; i++) data['$i'],
+      ];
+      if (values.every((v) => v is int && v >= 0 && v < 256)) {
+        return Uint8List.fromList(values.cast<int>());
+      }
+    }
+    throw Exception('signArbitrary data must be a string or bytes');
   }
 
   Future<Map<String, dynamic>> _signArbitrary(
@@ -269,34 +293,33 @@ class DappProviderBridge {
     );
     if (derived.address != signer) throw Exception('Signer mismatch');
 
-    final preview = data is String ? data : jsonEncode(data);
+    final bytes = _arbitraryBytes(data);
+    final text = data is String ? data : null;
+    var title = 'Sign message';
+    if (text != null && looksLikeSignIn(text)) {
+      final message = parseSignInMessage(text);
+      checkSignInBinding(
+        message,
+        origin: webOrigin(origin) ?? origin,
+        chainId: chainId,
+        signer: signer,
+      );
+      title = 'Sign in to ${message.domain}';
+    }
+
     if (!context.mounted) throw Exception('Browser closed');
     final approved = await _confirmSign(
       context,
       origin: origin,
-      title: 'Sign message',
-      detail: preview,
+      title: title,
+      detail: text ?? base64Encode(bytes),
       chainId: chainId,
       address: signer,
     );
     if (approved != true) throw Exception('Request rejected');
 
-    final bytes = data is String
-        ? Uint8List.fromList(utf8.encode(data))
-        : Uint8List.fromList(utf8.encode(jsonEncode(data)));
-    // ADR-36-ish: sign sha256 of the raw bytes for mobile arbitrary messages.
-    final digest = Uint8List.fromList(sha256.convert(bytes).bytes);
-    final seed = bip39.mnemonicToSeed(phrase.trim());
-    final path = "m/44'/${chain.coinType}'/${account.index}'/0/0";
-    final node = bip32.BIP32.fromSeed(seed).derivePath(path);
-    final signature = Uint8List.fromList(node.sign(digest) as List<int>);
-    return {
-      'pub_key': {
-        'type': 'tendermint/PubKeySecp256k1',
-        'value': base64Encode(derived.publicKey),
-      },
-      'signature': base64Encode(signature),
-    };
+    final key = _signingKey(phrase, chain, account, signer);
+    return signArbitraryResult(key, signer, bytes);
   }
 
   Future<void> _suggestChain(BuildContext context, List<dynamic> args) async {
@@ -387,31 +410,6 @@ class DappProviderBridge {
           },
         )
         .toList();
-  }
-
-  Uint8List _secp256k1SignSortedJson({
-    required String phrase,
-    required int coinType,
-    required int accountIndex,
-    required Map<String, dynamic> payload,
-  }) {
-    final seed = bip39.mnemonicToSeed(phrase.trim());
-    final path = "m/44'/$coinType'/$accountIndex'/0/0";
-    final node = bip32.BIP32.fromSeed(seed).derivePath(path);
-    final sorted = _sortKeysDeep(payload);
-    final digest = Uint8List.fromList(
-      sha256.convert(utf8.encode(jsonEncode(sorted))).bytes,
-    );
-    return Uint8List.fromList(node.sign(digest) as List<int>);
-  }
-
-  dynamic _sortKeysDeep(dynamic value) {
-    if (value is List) return value.map(_sortKeysDeep).toList();
-    if (value is Map) {
-      final keys = value.keys.map((k) => k.toString()).toList()..sort();
-      return {for (final k in keys) k: _sortKeysDeep(value[k])};
-    }
-    return value;
   }
 
   Future<bool?> _confirmConnect(

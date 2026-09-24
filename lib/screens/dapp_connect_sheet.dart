@@ -1,19 +1,17 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/config/connect_config.dart';
-import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/providers.dart';
-import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/wallet_connect_service.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-enum DappConnectKind { walletConnect, nativeWs, unknown }
+enum DappConnectKind { walletConnect, unknown }
 
-/// Unified connect / session-approval payload for the bottom sheet.
+/// WalletConnect session-approval payload for the bottom sheet. Zunia
+/// Connect requests have their own sheet in `native_request_sheets.dart`.
 class DappConnectOffer {
   const DappConnectOffer({
     required this.kind,
@@ -25,19 +23,9 @@ class DappConnectOffer {
     this.methods = const [],
     this.rawUri,
     this.wcProposal,
-    this.nativeRequest,
   });
 
   factory DappConnectOffer.fromUri(String uri) {
-    final parsed = Uri.tryParse(uri);
-    if (parsed != null && NativeConnectService.parseConnectLink(parsed) != null) {
-      return DappConnectOffer(
-        kind: DappConnectKind.nativeWs,
-        name: 'Zunia Connect',
-        url: parsed.host.isEmpty ? 'zunia://connect' : parsed.host,
-        rawUri: uri,
-      );
-    }
     if (uri.startsWith('wc:') || uri.contains('relay-protocol')) {
       return DappConnectOffer(
         kind: DappConnectKind.walletConnect,
@@ -67,19 +55,6 @@ class DappConnectOffer {
     );
   }
 
-  factory DappConnectOffer.fromNative(NativeConnectRequest r) {
-    return DappConnectOffer(
-      kind: DappConnectKind.nativeWs,
-      name: r.metadata.name,
-      url: r.metadata.url.isEmpty ? r.origin : r.metadata.url,
-      description: r.metadata.description,
-      icons: r.metadata.icons,
-      chains: r.chains,
-      methods: r.methods,
-      nativeRequest: r,
-    );
-  }
-
   final DappConnectKind kind;
   final String name;
   final String url;
@@ -89,7 +64,6 @@ class DappConnectOffer {
   final List<String> methods;
   final String? rawUri;
   final WcSessionProposal? wcProposal;
-  final NativeConnectRequest? nativeRequest;
 }
 
 Future<void> showDappConnectSheet(
@@ -139,8 +113,6 @@ class _DappConnectSheetState extends ConsumerState<_DappConnectSheet> {
     switch (offer.kind) {
       case DappConnectKind.walletConnect:
         return 'WalletConnect v2';
-      case DappConnectKind.nativeWs:
-        return 'Zunia Connect';
       case DappConnectKind.unknown:
         return 'raw payload';
     }
@@ -154,35 +126,6 @@ class _DappConnectSheetState extends ConsumerState<_DappConnectSheet> {
     ];
   }
 
-  List<NativeConnectAccount> _nativeAccounts() {
-    final phrase = ref.read(phraseProvider);
-    final wallet = ref.read(walletProvider);
-    final account = wallet.active;
-    final chains = ref.read(chainAccountsProvider);
-    if (phrase == null || account == null) return const [];
-    final kernel = WalletKernel.instance;
-    final out = <NativeConnectAccount>[];
-    for (final ca in chains) {
-      try {
-        final derived = kernel.deriveAddress(
-          phrase: phrase,
-          chain: ca.chain,
-          accountIndex: account.index,
-        );
-        out.add(
-          NativeConnectAccount(
-            chainId: ca.chain.chainId,
-            address: derived.address,
-            algo: 'secp256k1',
-            pubkey: base64Encode(derived.publicKey),
-            name: account.name,
-          ),
-        );
-      } catch (_) {}
-    }
-    return out;
-  }
-
   Future<void> _reject() async {
     setState(() {
       _busy = true;
@@ -193,10 +136,6 @@ class _DappConnectSheetState extends ConsumerState<_DappConnectSheet> {
       if (wcProposal != null) {
         final wc = ref.read(walletConnectProvider);
         if (wc.isReady) await wc.rejectProposal(wcProposal);
-      }
-      if (offer.kind == DappConnectKind.nativeWs &&
-          offer.nativeRequest != null) {
-        await ref.read(nativeConnectProvider).rejectConnect();
       }
     } catch (e) {
       debugPrint('reject connect: $e');
@@ -211,12 +150,8 @@ class _DappConnectSheetState extends ConsumerState<_DappConnectSheet> {
     });
     try {
       switch (offer.kind) {
-        case DappConnectKind.nativeWs:
-          await _approveNative();
-          break;
         case DappConnectKind.walletConnect:
           await _approveWc();
-          break;
         case DappConnectKind.unknown:
           throw StateError('Cannot connect an unrecognized payload');
       }
@@ -232,24 +167,6 @@ class _DappConnectSheetState extends ConsumerState<_DappConnectSheet> {
         _error = e.toString();
       });
     }
-  }
-
-  Future<void> _approveNative() async {
-    final native = ref.read(nativeConnectProvider);
-    final accounts = _nativeAccounts();
-    if (accounts.isEmpty) {
-      throw StateError('Unlock the wallet and enable at least one chain');
-    }
-
-    // Deep-link URI may still need the WS handshake.
-    final raw = offer.rawUri;
-    if (raw != null && !native.isConnected) {
-      await native.connectFromDeepLink(Uri.parse(raw));
-    }
-    final chains = offer.chains.isNotEmpty
-        ? offer.chains
-        : accounts.map((a) => a.chainId).toList();
-    await native.approveConnect(accounts: accounts, chains: chains);
   }
 
   Future<void> _approveWc() async {
@@ -490,142 +407,6 @@ class _DappConnectSheetState extends ConsumerState<_DappConnectSheet> {
                       label: _busy ? 'Connecting…' : 'Connect',
                       size: ZuniaButtonSize.lg,
                       onPressed: (_busy || !canConnect) ? null : _approve,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Sign-request sheet for native WS (and reusable for WC later).
-Future<void> showNativeSignSheet(
-  BuildContext context, {
-  required NativeSignRequest request,
-}) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (_) => _NativeSignSheet(request: request),
-  );
-}
-
-class _NativeSignSheet extends ConsumerStatefulWidget {
-  const _NativeSignSheet({required this.request});
-
-  final NativeSignRequest request;
-
-  @override
-  ConsumerState<_NativeSignSheet> createState() => _NativeSignSheetState();
-}
-
-class _NativeSignSheetState extends ConsumerState<_NativeSignSheet> {
-  bool _busy = false;
-
-  Future<void> _reject() async {
-    setState(() => _busy = true);
-    await ref.read(nativeConnectProvider).respondSignReject(
-          requestId: widget.request.id,
-        );
-    if (mounted) Navigator.of(context).pop();
-  }
-
-  Future<void> _approvePlaceholder() async {
-    // Kernel signing for amino/direct lands in a later pass; reject with a
-    // clear code so the dApp does not hang, and surface guidance to the user.
-    setState(() => _busy = true);
-    await ref.read(nativeConnectProvider).respondSignReject(
-          requestId: widget.request.id,
-          reason: 'Signing UI is ready; kernel sign path not wired yet',
-          code: 'SIGN_NOT_IMPLEMENTED',
-        );
-    if (!mounted) return;
-    Navigator.of(context).pop();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${widget.request.type} needs kernel signing. Request was declined.',
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
-    final req = widget.request;
-    final preview = const JsonEncoder.withIndent('  ').convert(req.payload);
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: s.sheetGradient,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-        border: Border(top: BorderSide(color: s.lineStrong)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: s.lineStrong,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                'Sign request',
-                style: zuniaSans(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: s.fg,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '${req.type} · ${req.chainId}',
-                style: zuniaMono(fontSize: 11, color: s.info),
-              ),
-              const SizedBox(height: 14),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 220),
-                child: SingleChildScrollView(
-                  child: Text(
-                    preview,
-                    style: zuniaMono(fontSize: 10, color: s.fgMuted, height: 1.45),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: ZuniaButton(
-                      label: 'Reject',
-                      variant: ZuniaButtonVariant.secondary,
-                      size: ZuniaButtonSize.lg,
-                      onPressed: _busy ? null : _reject,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ZuniaButton(
-                      label: 'Approve',
-                      size: ZuniaButtonSize.lg,
-                      onPressed: _busy ? null : _approvePlaceholder,
                     ),
                   ),
                 ],

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/crypto/keystore.dart';
+import 'package:zunia_mobile/services/connect_session_store.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/wallet_connect_service.dart';
@@ -17,7 +18,7 @@ final walletConnectProvider = Provider<WalletConnectService>((ref) {
 });
 
 final nativeConnectProvider = Provider<NativeConnectService>((ref) {
-  final service = NativeConnectService();
+  final service = NativeConnectService(store: SecureConnectSessionStore());
   ref.onDispose(() {
     unawaited(service.dispose());
   });

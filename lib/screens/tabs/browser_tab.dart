@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/browser/dapp_browser_store.dart';
 import 'package:zunia_mobile/screens/dapp_browser_screen.dart';
-import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
+import 'package:zunia_mobile/screens/native_request_sheets.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
 import 'package:zunia_mobile/widgets/wallet_header.dart';
@@ -303,17 +303,17 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                 ),
                 const SizedBox(height: 12),
                 ZuniaButton(
-                  label: 'Pair with WalletConnect',
+                  label: 'Scan a connect code',
                   variant: ZuniaButtonVariant.secondary,
                   leading: const Icon(Icons.qr_code_scanner),
                   onPressed: () async {
-                    final uri = await Navigator.of(context).push<String>(
+                    final code = await Navigator.of(context).push<String>(
                       MaterialPageRoute(
                         builder: (_) => const QrScannerScreen(),
                       ),
                     );
-                    if (!context.mounted || uri == null || uri.isEmpty) return;
-                    await showDappConnectSheet(context, uri: uri);
+                    if (!context.mounted || code == null || code.isEmpty) return;
+                    await handleScannedCode(context, ref, code);
                   },
                 ),
                 if (_favorites.isNotEmpty) ...[

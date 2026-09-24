@@ -1,4 +1,4 @@
-# Zunia mobile — secure connection config
+# Zunia mobile - secure connection config
 # Secrets via --dart-define or local env (never commit real project IDs to public forks if rotated)
 
 schema_version: 1
@@ -11,14 +11,17 @@ wallet:
   icons:
     - https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/main/png/icons/app/zunia-icon-512.png
 
-# First-party Zunia native WebSocket connect (zunia.connect.v1)
-# Override at build time: --dart-define=CONNECT_WS_PUBLIC_URL=... --dart-define=ZUNIA_CONNECT_API_BASE=...
+# First-party Zunia connect through the relay (zunia.connect.v2, end-to-end encrypted)
+# The wallet only pairs through trusted relays, because the relay reports which site created a session.
+# Add relays at build time: --dart-define=ZUNIA_CONNECT_TRUSTED_RELAYS=wss://a,wss://b
+# or --dart-define=CONNECT_WS_PUBLIC_URL=ws://192.168.1.10:8788 (debug builds also accept local network relays)
 native_ws:
-  protocol_version: zunia.connect.v1
-  ws_public_url: ${CONNECT_WS_PUBLIC_URL:-ws://localhost:8788}
-  api_base: ${ZUNIA_CONNECT_API_BASE:-}
+  protocol: zunia.connect.v2
+  trusted_relays:
+    - wss://api.zunialab.com
   ws_path: /v1/connect/ws
   http_path: /v1/connect/sessions
+  unpaired_ttl_seconds: 600
   paired_ttl_seconds: 86400
   deep_link: zunia://connect
 
@@ -82,4 +85,4 @@ app_ids:
   ios_bundle_id: com.zuniawallet.zuniaMobile
   # Fill after Play App Signing / Apple Team setup (used in Digital Asset Links / AASA)
   android_sha256_cert_fingerprints: []
-  apple_team_id: "" # e.g. ABCDE12345 — required for apple-app-site-association appID
+  apple_team_id: "" # e.g. ABCDE12345, required for apple-app-site-association appID

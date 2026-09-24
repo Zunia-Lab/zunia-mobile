@@ -38,6 +38,7 @@ dependencies:
   bech32: ^0.2.2
   pointycastle: ^3.9.1
   flutter_inappwebview: ^6.1.5
+  cryptography: ^2.9.0
 
   # Push notifications (Firebase Cloud Messaging):
   # Uncomment when a Firebase project is linked and google-services / GoogleService-Info

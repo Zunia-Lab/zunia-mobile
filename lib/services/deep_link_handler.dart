@@ -95,15 +95,12 @@ class DeepLinkHandler {
     // Browser deep links are surfaced on [links] for the UI to open.
     if (parseDappUrl(uri) != null) return;
 
-    final nativeCreds = NativeConnectService.parseConnectLink(uri);
-    if (nativeCreds != null) {
+    final link = uri.toString();
+    if (NativeConnectService.isPairingLink(link)) {
       try {
-        await _nativeConnect.connect(
-          sessionId: nativeCreds.sessionId,
-          pairingSecret: nativeCreds.pairingSecret,
-        );
+        await _nativeConnect.pair(link);
       } catch (e) {
-        debugPrint('DeepLinkHandler native connect error: $e');
+        _nativeConnect.reportError(e);
       }
       return;
     }
