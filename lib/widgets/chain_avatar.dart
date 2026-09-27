@@ -18,38 +18,15 @@ class ChainAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
     final ticker = chain.coinDenom.isNotEmpty
         ? chain.coinDenom
         : chain.chainName;
-    final fallback = Text(
-      ticker.length >= 3
-          ? ticker.substring(0, 3).toUpperCase()
-          : ticker.toUpperCase(),
-      style: zuniaMono(fontSize: size * 0.28, color: s.fgMuted),
-    );
-
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: s.stateHover,
-        border: selected
-            ? Border.all(color: s.accent, width: 1.5)
-            : null,
-      ),
-      child: chain.iconUrl == null
-          ? fallback
-          : Image.network(
-              chain.iconUrl!,
-              width: size,
-              height: size,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => fallback,
-            ),
+    return ZuniaTokenLogo(
+      symbol: ticker,
+      iconUrl: chain.iconUrl,
+      size: size,
+      verified: chain.inCosmosRegistry,
+      selected: selected,
     );
   }
 }

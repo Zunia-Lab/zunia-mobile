@@ -99,6 +99,7 @@ class _NetworksScreenState extends ConsumerState<NetworksScreen> {
                           chain.coinDenom.isEmpty ? null : chain.coinDenom,
                       iconUrl: chain.iconUrl,
                       testnet: chain.isTestnet,
+                      verified: chain.inCosmosRegistry,
                       control: ZuniaNetworkControl.toggle,
                       selected: enabled.contains(chain.chainId),
                       onToggle: () => ref

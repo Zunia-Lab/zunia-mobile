@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:zunia_mobile/chains/chain_catalog.dart';
+import 'package:zunia_mobile/services/validator_avatar_resolver.dart';
 import 'package:zunia_mobile/services/validator_logo_cache.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
@@ -33,12 +35,26 @@ class _CachedValidatorAvatarState extends State<CachedValidatorAvatar> {
         chainName: widget.chainName,
         operatorAddress: widget.operatorAddress,
         identity: widget.identity,
+        logoSlugs: ChainCatalog.isLoaded
+            ? ChainCatalog.instance.find(widget.chainId)?.logoSlugs
+            : null,
       );
+
+  Future<String?> _resolve() async {
+    final stored = await ValidatorLogoCache.read(_input);
+    if (stored != null && stored.isNotEmpty) return stored;
+    final fromKeybase = await ValidatorAvatarResolver.resolveOne(widget.identity);
+    if (fromKeybase != null && fromKeybase.isNotEmpty) {
+      await ValidatorLogoCache.write(_input, fromKeybase);
+      return fromKeybase;
+    }
+    return null;
+  }
 
   @override
   void initState() {
     super.initState();
-    _cached = ValidatorLogoCache.read(_input);
+    _cached = _resolve();
   }
 
   @override
@@ -48,7 +64,7 @@ class _CachedValidatorAvatarState extends State<CachedValidatorAvatar> {
         oldWidget.chainName != widget.chainName ||
         oldWidget.operatorAddress != widget.operatorAddress ||
         oldWidget.identity != widget.identity) {
-      _cached = ValidatorLogoCache.read(_input);
+      _cached = _resolve();
     }
   }
 
@@ -62,6 +78,7 @@ class _CachedValidatorAvatarState extends State<CachedValidatorAvatar> {
           chainName: widget.chainName,
           operatorAddress: widget.operatorAddress,
           identity: widget.identity,
+          logoSlugs: _input.logoSlugs,
           moniker: widget.moniker,
           size: widget.size,
           cachedUrl: snapshot.data,

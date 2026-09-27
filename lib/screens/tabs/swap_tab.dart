@@ -879,6 +879,7 @@ class _Leg extends StatelessWidget {
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        inputFormatters: const [DecimalDigitFormatter()],
                         textAlign: TextAlign.right,
                         onChanged: onAmountChanged,
                         style: zuniaSans(

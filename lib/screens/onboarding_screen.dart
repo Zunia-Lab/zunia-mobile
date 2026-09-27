@@ -709,6 +709,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 symbol: chain.coinDenom.isEmpty ? null : chain.coinDenom,
                 iconUrl: chain.iconUrl,
                 testnet: chain.isTestnet,
+                verified: chain.inCosmosRegistry,
                 selected: _selectedChains.contains(chain.chainId),
                 onToggle: () => setState(() {
                   if (!_selectedChains.remove(chain.chainId)) {

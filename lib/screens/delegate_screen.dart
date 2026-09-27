@@ -189,6 +189,7 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
+                      inputFormatters: const [DecimalDigitFormatter()],
                       textAlign: TextAlign.center,
                       style: zuniaSans(
                         fontSize: 38,

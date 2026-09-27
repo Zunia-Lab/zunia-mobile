@@ -23,6 +23,9 @@ class ChainEntry {
     this.rest,
     this.iconUrl,
     this.features,
+    this.registrySlug,
+    this.inCosmosRegistry = false,
+    this.logoSlugs,
   });
 
   factory ChainEntry.fromJson(Map<String, dynamic> json) {
@@ -57,6 +60,14 @@ class ChainEntry {
                 if (value is String) value,
             ]
           : null,
+      registrySlug: json['registrySlug'] as String?,
+      inCosmosRegistry: json['inCosmosRegistry'] == true,
+      logoSlugs: json['logoSlugs'] is List
+          ? [
+              for (final value in json['logoSlugs'] as List)
+                if (value is String) value,
+            ]
+          : null,
     );
   }
 
@@ -83,6 +94,15 @@ class ChainEntry {
   /// `zunia-extension/scripts/generate-chain-catalog.mjs`, which drops it — and
   /// the app then asks the chain rather than assuming either answer.
   final List<String>? features;
+
+  /// Official cosmos/chain-registry `chain_name` when this chain_id is listed.
+  final String? registrySlug;
+
+  /// True when `chainId` is in the official cosmos/chain-registry.
+  final bool inCosmosRegistry;
+
+  /// Cosmostation / registry directory names for validator moniker images.
+  final List<String>? logoSlugs;
 
   bool get isTestnet => network == 'testnet';
 
@@ -112,6 +132,9 @@ class ChainEntry {
         if (rest != null) 'rest': rest,
         if (iconUrl != null) 'iconUrl': iconUrl,
         if (features != null) 'features': features,
+        if (registrySlug != null) 'registrySlug': registrySlug,
+        'inCosmosRegistry': inCosmosRegistry,
+        if (logoSlugs != null) 'logoSlugs': logoSlugs,
       };
 
   bool matches(String query) {

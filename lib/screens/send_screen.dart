@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/screens/ibc_route_screen.dart';
@@ -207,12 +206,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      // Separators are normalised on read, so both are let in.
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(
-                          RegExp(r'[0-9.,\u00A0\u202F ]'),
-                        ),
-                      ],
+                      inputFormatters: const [DecimalDigitFormatter()],
                       textAlign: TextAlign.center,
                       style: zuniaSans(
                         fontSize: 40,

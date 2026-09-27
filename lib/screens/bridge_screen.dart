@@ -105,6 +105,7 @@ class _BridgeScreenState extends ConsumerState<BridgeScreen> {
                   controller: _amount,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: const [DecimalDigitFormatter()],
                   textAlign: TextAlign.right,
                   style: zuniaSans(
                     fontSize: 24,

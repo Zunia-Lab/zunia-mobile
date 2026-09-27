@@ -22,7 +22,14 @@ class _NetworkSwitcherSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ZuniaSemanticsExt.of(context);
     final enabled = ref.watch(walletProvider).enabledChainIds;
-    final networks = <({String chainId, String name, String? symbol})>[];
+    final networks = <
+        ({
+          String chainId,
+          String name,
+          String? symbol,
+          String? iconUrl,
+          bool verified,
+        })>[];
     for (final id in enabled) {
       final chain = ChainCatalog.isLoaded
           ? ChainCatalog.instance.find(id)
@@ -31,6 +38,8 @@ class _NetworkSwitcherSheet extends ConsumerWidget {
         chainId: id,
         name: chain?.chainName ?? id,
         symbol: chain?.coinDenom,
+        iconUrl: chain?.iconUrl,
+        verified: chain?.inCosmosRegistry ?? false,
       ));
     }
 
