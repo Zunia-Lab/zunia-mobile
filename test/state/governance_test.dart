@@ -11,6 +11,7 @@ import 'package:zunia_mobile/services/chain_reader.dart';
 import 'package:zunia_mobile/services/governance_client.dart';
 import 'package:zunia_mobile/services/interchain/lcd.dart';
 import 'package:zunia_mobile/state/governance.dart';
+import 'package:zunia_mobile/util/markdown_lite.dart';
 
 const hub = ChainEntry(
   chainId: 'cosmoshub-4',
@@ -224,6 +225,44 @@ void main() {
         nextGovernancePage(shown: 25, available: 25, chainsHaveMore: false),
         (count: 25, fetch: false),
       );
+    });
+  });
+
+  group('proposal text', () {
+    test('markdown becomes blocks of plain text, never markup', () {
+      final blocks = parseMarkdown(
+        '# Title\n\nSome **bold** and a [link](https://forum.example/t/1).\n'
+        '- one\n- two\n\n> quoted\n\n```\ncode\n```\n---\n'
+        '[bad](javascript:alert(1)) and https://www.example.com/a/very/long/path/that/goes/on/and/on',
+      );
+      expect(blocks.map((b) => b.kind), [
+        MdBlockKind.heading,
+        MdBlockKind.paragraph,
+        MdBlockKind.list,
+        MdBlockKind.quote,
+        MdBlockKind.code,
+        MdBlockKind.rule,
+        MdBlockKind.paragraph,
+      ]);
+      final para = blocks[1].children;
+      expect(para.firstWhere((r) => r.kind == MdInlineKind.strong).plain, 'bold');
+      expect(para.firstWhere((r) => r.kind == MdInlineKind.link).href, 'https://forum.example/t/1');
+      // A javascript: link keeps its text and loses its target.
+      final last = blocks.last.children;
+      expect(last.where((r) => r.kind == MdInlineKind.link).map((r) => r.href),
+          ['https://www.example.com/a/very/long/path/that/goes/on/and/on']);
+      expect(last.map((r) => r.plain).join(), startsWith('bad'));
+      expect(last.map((r) => r.href), isNot(contains(startsWith('javascript'))));
+      expect(displayMarkdownHref('https://www.example.com/a/very/long/path/that/goes/on/and/on'),
+          endsWith('…'));
+    });
+
+    test('pasted HTML is read as text', () {
+      final blocks = parseMarkdown('<p>Hello <strong>there</strong></p><ul><li>a</li><li>b</li></ul>');
+      expect(blocks.first.children.map((r) => r.plain).join(), 'Hello there');
+      expect(blocks.any((b) => b.kind == MdBlockKind.list), isTrue);
+      expect(parseMarkdown('<script>alert(1)</script><p>ok</p>').map((b) => b.children.map((r) => r.plain).join()),
+          ['alert(1)ok']);
     });
   });
 

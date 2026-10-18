@@ -156,9 +156,8 @@ class PluginDeviceAlerts implements DeviceAlerts {
                 IOSFlutterLocalNotificationsPlugin>()
             ?.checkPermissions();
         if (options == null) return AlertPermission.unavailable;
-        if (options.isProvisionalEnabled && !options.isAlertEnabled) {
-          return AlertPermission.provisional;
-        }
+        // Status .provisional: quiet delivery until the user allows banners.
+        if (options.isProvisionalEnabled) return AlertPermission.provisional;
         return options.isEnabled ? AlertPermission.granted : AlertPermission.off;
       }
       final enabled = await _plugin
