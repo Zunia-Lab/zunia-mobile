@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:zunia_mobile/config/connect_config.dart';
 import 'package:zunia_mobile/connect/connect_crypto.dart';
 import 'package:zunia_mobile/connect/connect_links.dart';
+import 'package:zunia_mobile/util/address_payload.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/wallet_connect_service.dart';
 
@@ -48,6 +49,7 @@ class DeepLinkHandler {
   StreamSubscription<Uri>? _sub;
   final _controller = StreamController<Uri>.broadcast();
   final _dapps = StreamController<Uri>.broadcast();
+  final _payments = StreamController<PaymentRequest>.broadcast();
   final List<(Uri, bool)> _held = [];
   bool _attached = false;
 
@@ -58,6 +60,9 @@ class DeepLinkHandler {
 
   /// Sites to open in the in-app browser, once the user confirmed the URL.
   Stream<Uri> get dappRequests => _dapps.stream;
+
+  /// Payment requests (`zunia://pay?...`) to open in Send.
+  Stream<PaymentRequest> get paymentRequests => _payments.stream;
 
   WalletConnectService get walletConnect => _walletConnect;
   NativeConnectService get nativeConnect => _nativeConnect;
@@ -93,6 +98,7 @@ class DeepLinkHandler {
     await stop();
     await _controller.close();
     await _dapps.close();
+    await _payments.close();
   }
 
   /// The unlocked UI is up: run what waited behind the lock screen.
@@ -170,6 +176,8 @@ class DeepLinkHandler {
         }
       case DappLink(:final url):
         if (!_dapps.isClosed) _dapps.add(url);
+      case PaymentLink(:final request):
+        if (!_payments.isClosed) _payments.add(request);
       case AddressLink():
         // Only the scanner acts on addresses.
         return;

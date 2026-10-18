@@ -67,6 +67,14 @@ final class AddressLink extends ConnectLink {
   final String address;
 }
 
+/// A payment request (`zunia://pay?...`, see address_payload.dart): opens Send
+/// with what it names. Sending still needs the user's review and signature.
+final class PaymentLink extends ConnectLink {
+  const PaymentLink(this.request);
+
+  final PaymentRequest request;
+}
+
 /// Something that looks like WalletConnect v1 or a damaged code: worth a
 /// message instead of silence when it was scanned.
 final class UnsupportedLink extends ConnectLink {
@@ -154,6 +162,17 @@ ConnectLink? classifyLink(String raw, {bool scanned = false}) {
         topic: uri.queryParameters['sessionTopic'],
         requestId: int.tryParse(uri.queryParameters['requestId'] ?? ''),
       );
+    }
+
+    if (own && uri.scheme.toLowerCase() == paymentRequestScheme &&
+        uri.host.toLowerCase() == paymentRequestHost) {
+      try {
+        final request = parsePaymentRequest(value);
+        if (request != null) return PaymentLink(request);
+      } on PaymentRequestException catch (e) {
+        return UnsupportedLink(e.message);
+      }
+      return const UnsupportedLink('This payment request names no recipient');
     }
 
     if (own &&

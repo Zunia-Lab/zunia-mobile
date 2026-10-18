@@ -16,7 +16,6 @@ import 'package:zunia_mobile/screens/dapp_browser_screen.dart';
 import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
 import 'package:zunia_mobile/screens/send_screen.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
-import 'package:zunia_mobile/util/address_payload.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// Opens the camera, then acts on what was scanned.
@@ -39,23 +38,6 @@ Future<void> routeScannedCode(
   void say(String text) => messenger
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(text)));
-
-  // A payment request (`zunia://pay?...`, see address_payload.dart) opens Send
-  // with everything it names filled in.
-  final PaymentRequest? payment;
-  try {
-    payment = _paymentRequestOf(code);
-  } on PaymentRequestException catch (e) {
-    say(e.message);
-    return;
-  }
-  if (payment != null) {
-    final request = payment;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => SendScreen.fromRequest(request)),
-    );
-    return;
-  }
 
   switch (classifyLink(code, scanned: true)) {
     case PairLink(:final link):
@@ -99,6 +81,10 @@ Future<void> routeScannedCode(
       }
     case AddressLink(:final address):
       if (context.mounted) await _onAddress(context, ref, address);
+    case PaymentLink(:final request):
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => SendScreen.fromRequest(request)),
+      );
     case UnsupportedLink(:final reason):
       say(reason);
     case null:
@@ -170,11 +156,4 @@ Future<void> _onAddress(
   if (!context.mounted) return;
   ScaffoldMessenger.of(context)
       .showSnackBar(const SnackBar(content: Text('Address copied')));
-}
-
-/// A `zunia://pay` request, or null for any other code. Throws
-/// [PaymentRequestException] for a malformed one, so the user hears why.
-PaymentRequest? _paymentRequestOf(String code) {
-  if (!code.trim().toLowerCase().startsWith('zunia://pay')) return null;
-  return parsePaymentRequest(code);
 }

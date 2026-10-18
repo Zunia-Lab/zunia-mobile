@@ -284,7 +284,7 @@ class SecurityScreen extends ConsumerWidget {
               const SizedBox(height: 18),
               Center(
                 child: Text(
-                  'AUDIT PUBLISHED · APACHE 2.0',
+                  'OPEN SOURCE · APACHE 2.0 · NOT YET AUDITED',
                   style: zuniaMono(fontSize: 9.5, letterSpacing: 1.2, color: s.fgDim),
                 ),
               ),

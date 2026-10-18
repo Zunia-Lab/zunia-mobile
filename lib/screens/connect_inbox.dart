@@ -16,6 +16,8 @@ import 'package:zunia_mobile/screens/native_request_sheets.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/screens/send_screen.dart';
+import 'package:zunia_mobile/util/address_payload.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 class ConnectInbox extends ConsumerStatefulWidget {
@@ -48,7 +50,8 @@ class _ConnectInboxState extends ConsumerState<ConnectInbox>
     _subs
       ..add(native.changes.listen((_) => _showNext()))
       ..add(native.notices.listen(_onNotice))
-      ..add(_deep.dappRequests.listen(_onDappLink));
+      ..add(_deep.dappRequests.listen(_onDappLink))
+      ..add(_deep.paymentRequests.listen(_onPayment));
     // By account id, not derivation index: accounts with their own phrase all
     // derive at index 0, and switching between them must still re-announce.
     _accountSub = ref.listenManual<String?>(
@@ -148,6 +151,25 @@ class _ConnectInboxState extends ConsumerState<ConnectInbox>
       if (await confirmOpenDapp(context, url) && mounted) {
         await DappBrowserScreen.open(context, url: url.toString());
       }
+    } finally {
+      _busy = false;
+    }
+    unawaited(_showNext());
+  }
+
+  /// Another app asked to be paid: open Send with what it names. Nothing
+  /// moves until the user reviews and signs there.
+  Future<void> _onPayment(PaymentRequest request) async {
+    if (!mounted) return;
+    while (_busy) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+    }
+    _busy = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => SendScreen.fromRequest(request)),
+      );
     } finally {
       _busy = false;
     }
