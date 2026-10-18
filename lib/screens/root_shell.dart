@@ -314,12 +314,13 @@ class _RootShellState extends ConsumerState<RootShell> {
           bottom: false,
           child: IndexedStack(
             index: index < 0 ? 0 : index,
-            children: const [
-              HomeTab(),
-              SwapTab(),
-              EarnTab(),
-              BrowserTab(),
-              ActivityScreen(embedded: true),
+            children: [
+              // Home's Swap and Stake actions switch tabs here.
+              HomeTab(onOpenTab: (id) => setState(() => _tab = id)),
+              const SwapTab(),
+              const EarnTab(),
+              const BrowserTab(),
+              const ActivityScreen(embedded: true),
             ],
           ),
         ),
