@@ -43,3 +43,9 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // BiometricPrompt with a CryptoObject for the hardware-bound biometric
+    // unlock (ZuniaSecurity.kt).
+    implementation("androidx.biometric:biometric:1.1.0")
+}
