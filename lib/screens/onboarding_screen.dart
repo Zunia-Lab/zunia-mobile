@@ -27,10 +27,24 @@ enum _Step {
 const _createSteps = 4;
 const _importSteps = 3;
 
+// --- Entry from WelcomeScreen (firstrun) -------------------------------------
+// WelcomeScreen asks the safety acknowledgements, then opens one flow directly.
+// Keep this API through the onboarding rewrite.
+
+/// The flow [OnboardingScreen] opens on when WelcomeScreen has already asked.
+enum OnboardingMode { create, import }
+
+// ------------------------------------------------------------------------------
+
 /// Create or restore a wallet in discrete steps.
 /// Safety acknowledgements appear only on the welcome step.
 class OnboardingScreen extends ConsumerStatefulWidget {
-  const OnboardingScreen({super.key});
+  const OnboardingScreen({super.key, this.initialMode});
+
+  /// Starts in that flow, skipping the welcome/choice step (and its
+  /// acknowledgements, which WelcomeScreen has taken); Back from the flow's
+  /// first step returns to the screen that pushed this one.
+  final OnboardingMode? initialMode;
 
   @override
   ConsumerState<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -74,6 +88,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     super.initState();
     _importPhrase.addListener(_syncImportWordCount);
     _regenerate();
+    // Entry from WelcomeScreen.
+    switch (widget.initialMode) {
+      case OnboardingMode.create:
+        _step = _Step.createPhrase;
+      case OnboardingMode.import:
+        _step = _Step.importPhrase;
+      case null:
+        break;
+    }
   }
 
   @override
@@ -261,6 +284,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   void _goBack() {
+    // Entry from WelcomeScreen: the first step backs out to it.
+    if (widget.initialMode != null &&
+        (_step == _Step.createPhrase || _step == _Step.importPhrase)) {
+      Navigator.of(context).maybePop();
+      return;
+    }
     setState(() {
       _error = null;
       switch (_step) {

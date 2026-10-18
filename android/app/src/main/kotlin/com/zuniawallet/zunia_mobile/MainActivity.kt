@@ -64,5 +64,11 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Android 12+: Flutter's first frame already shows the splash mark on the
+        // same pixels (values-v31/styles.xml), so hand over at once. The default
+        // exit (a fade while the window slides up) would make the mark jump.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            splashScreen.setOnExitAnimationListener { view -> view.remove() }
+        }
     }
 }
