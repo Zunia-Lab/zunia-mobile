@@ -10,8 +10,10 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
+import 'package:zunia_mobile/prices/price_service.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/services/interchain/xcs_route.dart';
+import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
@@ -249,6 +251,8 @@ List<Override> swapOverrides({
       (ref) => SwapController(ref, restoreIntent: false),
     ),
     swapClockProvider.overrideWithValue(() => worldClock()),
+    // No price reads in these tests: the fiat hint stays blank.
+    pricesProvider.overrideWith((_) async => PriceSnapshot.empty),
   ];
 }
 

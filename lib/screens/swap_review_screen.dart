@@ -35,17 +35,6 @@ import 'package:zunia_mobile/tx/tx_engine.dart';
 import 'package:zunia_mobile/util/amounts.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// SECURITY WORKSTREAM HOOK: the one call site where a swap asks the user to
-/// confirm the signature (password per signature, biometrics) before the
-/// kernel signs. Replace the body with the security workstream's
-/// `confirmSigning(...)`; until then an unlocked wallet (a phrase in
-/// `phraseProvider`) is the only gate, as for every other flow on this branch.
-Future<bool> confirmSwapSigning(
-  BuildContext context,
-  WidgetRef ref,
-  TxQuote quote,
-) async => true;
-
 class SwapReviewScreen extends ConsumerStatefulWidget {
   const SwapReviewScreen({
     super.key,
@@ -227,7 +216,7 @@ class _SwapReviewScreenState extends ConsumerState<SwapReviewScreen> {
       return;
     }
     // SECURITY WORKSTREAM: confirmSigning(...) goes through this one call.
-    if (!await confirmSwapSigning(context, ref, _quote)) return;
+    // "Password on every signature" is asked inside TxEngine.signAndBroadcast.
     if (!mounted) return;
     setState(() {
       _signing = true;

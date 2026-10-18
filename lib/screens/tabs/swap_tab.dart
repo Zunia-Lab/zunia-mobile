@@ -27,6 +27,8 @@ import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
+import 'package:zunia_mobile/prices/fiat.dart';
+import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/swap/pool_swap.dart';
 import 'package:zunia_mobile/swap/swap_amounts.dart';
@@ -40,14 +42,29 @@ import 'package:zunia_mobile/widgets/wallet_header.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// A token's fiat value, when a price source exists for it. Null hides the
-/// hint. INTEGRATION NOTE: this branch has no price source; the portfolio
-/// workstream's prices plug in here and nowhere else.
+/// hint.
 typedef SwapFiatOf = String? Function(SwapAsset asset, BigInt units);
 
-final swapFiatProvider = Provider<SwapFiatOf>(
-  (ref) =>
-      (asset, units) => null,
-);
+/// Prices come from the portfolio's snapshot, which prices each chain's own
+/// coin: a token gets a hint only when it is that coin, here or proven to have
+/// travelled from its chain, with known decimals. Anything else stays blank
+/// rather than borrowing a price that may not be its own.
+final swapFiatProvider = Provider<SwapFiatOf>((ref) {
+  final snapshot = ref.watch(pricesProvider).valueOrNull;
+  if (snapshot == null || snapshot.prices.isEmpty) return (asset, units) => null;
+  return (asset, units) {
+    final id = asset.identity;
+    if (!id.decimalsKnown || !id.proven || !ChainCatalog.isLoaded) return null;
+    final origin = id.originChainId ?? id.chainId;
+    final entry = ChainCatalog.instance.find(origin);
+    final base = id.originDenom ?? id.denom;
+    if (entry == null || entry.coinMinimalDenom != base) return null;
+    final price = snapshot.prices[origin]?.price;
+    if (price == null) return null;
+    final value = units / BigInt.from(10).pow(id.decimals) * price;
+    return '≈ ${formatFiatFull(value, snapshot.currency)}';
+  };
+});
 
 class SwapTab extends ConsumerStatefulWidget {
   const SwapTab({super.key, this.showHeader = true});
@@ -259,10 +276,17 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
     if (from == null) return;
     await _controller.rememberMoveFirst(view);
     if (!mounted) return;
-    // Send has no token or destination prefill yet: it opens on the chain the
-    // tokens are on, and the callout above says where to send them.
+    // Send opens on the move itself: this token, to Osmosis. Swap remembers
+    // the pair and picks it up when the user comes back.
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => SendScreen(chainId: from.chainId)),
+      MaterialPageRoute(
+        builder: (_) => SendScreen(
+          initialChainId: from.chainId,
+          initialDenom: from.identity.denom,
+          initialDestChainId: 'osmosis-1',
+          initialCross: true,
+        ),
+      ),
     );
   }
 
