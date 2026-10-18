@@ -198,3 +198,61 @@ class ListSkeleton extends StatelessWidget {
     );
   }
 }
+
+/// Yes / No / Veto / Abstain shares as one bar.
+///
+/// `ZuniaTallyBar` paints nothing: its segments are bare `ColoredBox`es in a
+/// Row that does not stretch them, so each takes the smallest height its
+/// constraints allow, zero. Candidate fix for zunia_ui.
+class TallyBar extends StatelessWidget {
+  const TallyBar({
+    super.key,
+    required this.yes,
+    required this.no,
+    required this.veto,
+    required this.abstain,
+    this.height = 6,
+  });
+
+  final double yes;
+  final double no;
+  final double veto;
+  final double abstain;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    final total = yes + no + veto + abstain;
+    final parts = [
+      (yes, s.accent),
+      (no, s.fgDim),
+      (veto, s.danger),
+      (abstain, s.lineStrong),
+    ];
+    return ExcludeSemantics(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: SizedBox(
+          height: height,
+          child: ColoredBox(
+            color: s.glass2,
+            child: total <= 0
+                ? const SizedBox.expand()
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final (share, color) in parts)
+                        if ((share / total * 1000).round() > 0)
+                          Expanded(
+                            flex: (share / total * 1000).round(),
+                            child: ColoredBox(color: color),
+                          ),
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}

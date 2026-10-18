@@ -62,8 +62,8 @@ class NotificationSettingsScreen extends ConsumerWidget {
         'Delivered quietly to Notification Center. Turn the switch off and on '
             'to allow banners.',
       AlertPermission.off when prefs.alerts =>
-        'Allowed here but blocked in system settings, so nothing reaches the '
-            'lock screen.',
+        'The system has not allowed notifications from Zunia yet. Turn the '
+            'switch on to ask, or allow them in system settings.',
       _ =>
         'Raised by the app while it runs. Nothing is sent to a server for '
             'them, and nothing arrives once the system has suspended Zunia.',

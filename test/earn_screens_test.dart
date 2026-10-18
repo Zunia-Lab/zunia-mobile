@@ -278,7 +278,7 @@ void main() {
           apr: const AprEstimate(apr: 0.18, inflation: 0.1, communityTax: 0.1, bondedRatio: 0.5),
         ),
       );
-      expect(find.text('≈ 18.0%'), findsOneWidget);
+      expect(find.text('18.0%'), findsOneWidget);
       await tester.tap(find.bySemanticsLabel(RegExp('Estimated APR')));
       await tester.pumpAndSettle();
       expect(find.textContaining('inflation × (1 − community tax)'), findsOneWidget);

@@ -463,7 +463,7 @@ class _ProposalCard extends ConsumerWidget {
                 ),
                 if (tally != null) ...[
                   const SizedBox(height: 10),
-                  ZuniaTallyBar(
+                  TallyBar(
                     yes: tally.yes,
                     no: tally.no,
                     veto: tally.veto,

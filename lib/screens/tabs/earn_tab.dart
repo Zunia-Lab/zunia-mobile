@@ -566,7 +566,7 @@ class _AprBadge extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '≈ ${percent(estimate.apr)}',
+                  percent(estimate.apr),
                   style: zuniaSans(
                     fontSize: 20,
                     fontWeight: FontWeight.w500,

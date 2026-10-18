@@ -364,7 +364,7 @@ class _ValidatorFacts extends StatelessWidget {
         if (apr != null && !v.jailed)
           FactRow(
             label: 'Est. APR after commission',
-            value: '≈ ${percent(apr!.afterCommission(v.commission))}',
+            value: percent(apr!.afterCommission(v.commission)),
           ),
         if (website != null)
           FactRow(

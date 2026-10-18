@@ -349,7 +349,7 @@ class _Tally extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            ZuniaTallyBar(
+            TallyBar(
               yes: tally.yes,
               no: tally.no,
               veto: tally.veto,
