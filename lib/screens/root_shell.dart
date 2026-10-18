@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/browser/curated_dapps.dart';
 import 'package:zunia_mobile/connect/wallet_signer.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
@@ -374,6 +375,8 @@ class _Drawer extends ConsumerWidget {
     final native = ref.watch(nativeConnectProvider);
     final sessionCount =
         wc.activeSessions.length + native.activeSessions.length;
+    // The Discover list's own length, so the count follows its data file.
+    final apps = ref.watch(curatedDappsProvider).valueOrNull?.dapps.length;
 
     return ZuniaDrawerPanel(
       children: [
@@ -466,7 +469,7 @@ class _Drawer extends ConsumerWidget {
           icon: Icons.apps_outlined,
           label: 'Ecosystem',
           active: ecosystemActive,
-          meta: '${_appsCount()}',
+          meta: apps?.toString(),
           onTap: onEcosystem,
         ),
         ZuniaDrawerRow(
@@ -554,8 +557,6 @@ class _Drawer extends ConsumerWidget {
       ],
     );
   }
-
-  static int _appsCount() => 6;
 }
 
 /// Missions moved off the tab bar; it opens from the drawer as a page.
