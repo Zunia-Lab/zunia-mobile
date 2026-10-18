@@ -100,7 +100,7 @@ class AssetDetailScreen extends ConsumerWidget {
                         padding: const EdgeInsets.only(top: 4),
                         child: Row(
                           children: [
-                            Icon(Icons.verified_rounded, size: 14, color: s.info),
+                            const ZuniaVerifiedBadge(size: 16),
                             const SizedBox(width: 4),
                             Text('Verified origin', style: zuniaSans(fontSize: 12, color: s.info)),
                           ],

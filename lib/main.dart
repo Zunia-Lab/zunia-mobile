@@ -120,7 +120,17 @@ class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver
       themeMode: themeMode,
       // Auto-lock, the lock screen over the app, the app-switcher cover.
       builder: (context, child) {
-        return SecurityShell(child: child ?? const SizedBox.shrink());
+        // The design's sizes read a touch small on a phone held at arm's
+        // length: everything is set 8% larger, on top of the user's own text
+        // size, which keeps the hierarchy and still honours accessibility.
+        final media = MediaQuery.of(context);
+        final user = media.textScaler.scale(16) / 16;
+        return MediaQuery(
+          data: media.copyWith(
+            textScaler: TextScaler.linear((user * kTextBoost).clamp(0.8, 2.2)),
+          ),
+          child: SecurityShell(child: child ?? const SizedBox.shrink()),
+        );
       },
       home: const SplashGate(child: _AppGate()),
     );
@@ -162,6 +172,9 @@ class _AppGate extends ConsumerWidget {
   }
 }
 
+/// How much larger than the design's sizes text is drawn (see the app builder).
+const double kTextBoost = 1.08;
+
 /// Shown instead of the wallet when the build is missing its signing core.
 class KernelMissingScreen extends StatelessWidget {
   const KernelMissingScreen({super.key, this.reason});
@@ -172,7 +185,7 @@ class KernelMissingScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = ZuniaSemanticsExt.of(context);
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),

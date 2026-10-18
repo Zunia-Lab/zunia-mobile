@@ -276,7 +276,6 @@ class _TxReviewScreenState extends ConsumerState<TxReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
     final quote = _quote;
     final feeCoin = quote?.feeCoin;
     final gain = intent.gainBaseUnits;
@@ -285,7 +284,7 @@ class _TxReviewScreenState extends ConsumerState<TxReviewScreen> {
         (BigInt.tryParse(feeCoin.amount) ?? BigInt.zero) >= gain;
 
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(
@@ -696,7 +695,7 @@ class _TxResultScreenState extends ConsumerState<TxResultScreen> {
     return PopScope(
       canPop: !busy,
       child: Scaffold(
-        backgroundColor: s.screenMid,
+        backgroundColor: zuniaGroundTop(context),
         body: SafeArea(
           bottom: false,
           child: ZuniaScreenScaffold(

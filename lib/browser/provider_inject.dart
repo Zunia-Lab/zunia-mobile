@@ -298,16 +298,40 @@ const _template = r'''
     off: off
   };
 
+  // What Keplr's own script puts on window, so a dApp written for Keplr finds
+  // the wallet the same way: the object, the three signer helpers older dApps
+  // call directly, and the initialized event some of them wait for.
+  var keplrGlobals = {
+    getOfflineSigner: function (chainId) { return provider.getOfflineSigner(chainId); },
+    getOfflineSignerOnlyAmino: function (chainId) { return provider.getOfflineSignerOnlyAmino(chainId); },
+    getOfflineSignerAuto: function (chainId) { return provider.getOfflineSignerAuto(chainId); }
+  };
+
   function applyKeplrAlias(enabled) {
     keplrAliasOn = enabled;
     if (enabled) {
       window.keplr = provider;
-    } else if (window.keplr === provider) {
-      try {
-        delete window.keplr;
-      } catch (_) {
-        window.keplr = undefined;
+      Object.keys(keplrGlobals).forEach(function (name) {
+        if (typeof window[name] !== 'function') window[name] = keplrGlobals[name];
+      });
+      window.dispatchEvent(new Event('keplr#initialized'));
+    } else {
+      if (window.keplr === provider) {
+        try {
+          delete window.keplr;
+        } catch (_) {
+          window.keplr = undefined;
+        }
       }
+      Object.keys(keplrGlobals).forEach(function (name) {
+        if (window[name] === keplrGlobals[name]) {
+          try {
+            delete window[name];
+          } catch (_) {
+            window[name] = undefined;
+          }
+        }
+      });
     }
   }
 

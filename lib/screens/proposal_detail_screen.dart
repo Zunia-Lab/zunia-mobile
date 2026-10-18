@@ -100,7 +100,7 @@ class _ProposalDetailScreenState extends ConsumerState<ProposalDetailScreen> {
     final dates = MaterialLocalizations.of(context);
 
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(

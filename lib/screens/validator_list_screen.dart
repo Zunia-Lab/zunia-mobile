@@ -106,7 +106,7 @@ class _ValidatorListScreenState extends ConsumerState<ValidatorListScreen> {
     };
 
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(

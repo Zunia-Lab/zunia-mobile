@@ -36,9 +36,11 @@ void main() {
     expect(script, contains('window.top !== window.self'));
     expect(script, contains("loc.protocol === 'https:'"));
     expect(script, contains('__zuniaProviderInstalled'));
-    // No Keplr-era globals and no initialization event in Keplr's name.
+    // Keplr's globals and initialization event exist only behind the alias
+    // switch, and are never assigned unconditionally.
     expect(script, isNot(contains('window.getOfflineSigner =')));
-    expect(script, isNot(contains("'keplr#initialized'")));
+    expect(script, contains('function applyKeplrAlias(enabled)'));
+    expect(script, contains("'keplr#initialized'"));
     // Window events the extension dispatches.
     for (final name in ['zunia_locked', 'zunia_chainchanged', "'zunia_' + name", "'keplr_' + name"]) {
       expect(script, contains(name));

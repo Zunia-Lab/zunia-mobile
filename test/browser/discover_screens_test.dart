@@ -55,7 +55,7 @@ void main() {
       expect(tester.takeException(), isNull);
       await _pump(tester, const BrowserTab(), platform: platform, size: const Size(390, 844));
       expect(tester.takeException(), isNull);
-      expect(find.text('Discover'), findsOneWidget);
+      expect(find.text('Browser'), findsOneWidget);
       expect(find.text('FEATURED'), findsOneWidget);
       await tester.scrollUntilVisible(find.text('Mintscan'), 200, scrollable: find.byType(Scrollable).first);
       expect(find.text('Mintscan'), findsOneWidget);

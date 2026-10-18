@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:zunia_mobile/browser/curated_dapps.dart';
 import 'package:zunia_mobile/notifications/notifications.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
@@ -15,13 +14,11 @@ import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/notifications_screen.dart';
 import 'package:zunia_mobile/screens/pair_device.dart';
-import 'package:zunia_mobile/screens/rewards_screen.dart';
 import 'package:zunia_mobile/screens/sessions_screen.dart';
 import 'package:zunia_mobile/screens/settings_screen.dart';
 import 'package:zunia_mobile/screens/tabs/browser_tab.dart';
 import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
 import 'package:zunia_mobile/screens/tabs/home_tab.dart';
-import 'package:zunia_mobile/screens/tabs/missions_tab.dart';
 import 'package:zunia_mobile/screens/tabs/swap_tab.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
@@ -37,6 +34,7 @@ class RootShell extends ConsumerStatefulWidget {
 }
 
 class _RootShellState extends ConsumerState<RootShell> {
+  // Browser sits in the middle: it is where a site meets the wallet.
   static const _tabs = [
     ZuniaTabItem(
       id: 'home',
@@ -53,6 +51,14 @@ class _RootShellState extends ConsumerState<RootShell> {
       cupertinoIcon: CupertinoIcons.arrow_right_arrow_left,
     ),
     ZuniaTabItem(
+      id: 'browser',
+      label: 'Browser',
+      icon: Icons.explore_outlined,
+      activeIcon: Icons.explore,
+      cupertinoIcon: CupertinoIcons.compass,
+      cupertinoActiveIcon: CupertinoIcons.compass_fill,
+    ),
+    ZuniaTabItem(
       id: 'earn',
       label: 'Earn',
       icon: Icons.savings_outlined,
@@ -61,20 +67,12 @@ class _RootShellState extends ConsumerState<RootShell> {
       cupertinoActiveIcon: CupertinoIcons.graph_circle_fill,
     ),
     ZuniaTabItem(
-      id: 'browser',
-      label: 'Discover',
-      icon: Icons.explore_outlined,
-      activeIcon: Icons.explore,
-      cupertinoIcon: CupertinoIcons.compass,
-      cupertinoActiveIcon: CupertinoIcons.compass_fill,
-    ),
-    ZuniaTabItem(
-      id: 'activity',
-      label: 'Activity',
-      icon: Icons.receipt_long_outlined,
-      activeIcon: Icons.receipt_long,
-      cupertinoIcon: CupertinoIcons.clock,
-      cupertinoActiveIcon: CupertinoIcons.clock_fill,
+      id: 'gov',
+      label: 'Gov',
+      icon: Icons.how_to_vote_outlined,
+      activeIcon: Icons.how_to_vote,
+      cupertinoIcon: CupertinoIcons.checkmark_seal,
+      cupertinoActiveIcon: CupertinoIcons.checkmark_seal_fill,
     ),
   ];
 
@@ -123,35 +121,30 @@ class _RootShellState extends ConsumerState<RootShell> {
 
   // Requests from connected sites and apps show over whichever tab is open.
   @override
-  Widget build(BuildContext context) => ConnectInbox(child: _shell(context));
+  Widget build(BuildContext context) {
+    // Start the notice engine before any header reads its unread count.
+    ref.listen(noticeEngineProvider, (_, _) {});
+    return ConnectInbox(child: _shell(context));
+  }
 
   Widget _shell(BuildContext context) {
     final index = _tabs.indexWhere((t) => t.id == _tab);
-    final s = ZuniaSemanticsExt.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(gradient: s.screenGradient),
+    return ZuniaBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
+        // What the tab bar shows is not repeated here.
         endDrawer: _Drawer(
-          ecosystemActive: _tab == 'browser',
-          onEcosystem: () {
-            Navigator.of(context).pop();
-            setState(() => _tab = 'browser');
-          },
+          onActivity: () => _fromDrawer(const ActivityScreen()),
           onNetworks: () => _fromDrawer(const NetworksScreen()),
           onBridge: () => _fromDrawer(const BridgeScreen()),
           onCollectibles: () => _fromDrawer(const NftCollectionScreen()),
-          onGovernance: () => _fromDrawer(const GovernanceScreen()),
-          onActivity: () => _fromDrawer(const ActivityScreen()),
           onMissions: () => _fromDrawer(const _MissionsPage()),
-          onRewards: () => _fromDrawer(const RewardsScreen()),
           onPair: () {
             Navigator.of(context).pop();
             unawaited(openPairDevice(context, ref));
           },
           onSessions: () => _fromDrawer(const SessionsScreen()),
           onAddressBook: () => _fromDrawer(const AddressBookScreen()),
-          onNotifications: () => _fromDrawer(const NotificationsScreen()),
           onSettings: () => _fromDrawer(const SettingsScreen()),
           onHelp: () {
             Navigator.of(context).pop();
@@ -233,9 +226,9 @@ class _RootShellState extends ConsumerState<RootShell> {
               // Home's Swap and Stake actions switch tabs here.
               HomeTab(onOpenTab: (id) => setState(() => _tab = id)),
               const SwapTab(),
-              const EarnTab(),
               const BrowserTab(),
-              const ActivityScreen(embedded: true),
+              const EarnTab(),
+              const GovernanceScreen(embedded: true),
             ],
           ),
         ),
@@ -246,36 +239,26 @@ class _RootShellState extends ConsumerState<RootShell> {
 
 class _Drawer extends ConsumerWidget {
   const _Drawer({
-    required this.ecosystemActive,
-    required this.onEcosystem,
+    required this.onActivity,
     required this.onNetworks,
     required this.onBridge,
     required this.onCollectibles,
-    required this.onGovernance,
-    required this.onActivity,
     required this.onMissions,
-    required this.onRewards,
     required this.onPair,
     required this.onSessions,
     required this.onAddressBook,
-    required this.onNotifications,
     required this.onSettings,
     required this.onHelp,
   });
 
-  final bool ecosystemActive;
-  final VoidCallback onEcosystem;
+  final VoidCallback onActivity;
   final VoidCallback onNetworks;
   final VoidCallback onBridge;
   final VoidCallback onCollectibles;
-  final VoidCallback onGovernance;
-  final VoidCallback onActivity;
   final VoidCallback onMissions;
-  final VoidCallback onRewards;
   final VoidCallback onPair;
   final VoidCallback onSessions;
   final VoidCallback onAddressBook;
-  final VoidCallback onNotifications;
   final VoidCallback onSettings;
   final VoidCallback onHelp;
 
@@ -285,31 +268,20 @@ class _Drawer extends ConsumerWidget {
     final wallet = ref.watch(walletProvider);
     final address = ref.watch(primaryAddressProvider);
     final prefs = ref.watch(preferencesProvider);
-    final accounts = ref.watch(chainAccountsProvider);
     final wc = ref.watch(walletConnectProvider);
     final native = ref.watch(nativeConnectProvider);
     final sessionCount =
         wc.activeSessions.length + native.activeSessions.length;
     // The Discover list's own length, so the count follows its data file.
-    final apps = ref.watch(curatedDappsProvider).valueOrNull?.dapps.length;
-    final unread = ref.watch(unreadNoticeCountProvider);
-
     return ZuniaDrawerPanel(
       children: [
         Row(
           children: [
-            Container(
-              width: 34,
-              height: 34,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: s.accentGradient,
-              ),
-              child: Text(
-                wallet.active?.initial ?? 'W',
-                style: zuniaMono(fontSize: 12, color: s.accentFg),
-              ),
+            // The same orb as the Wallet header, so the account looks the
+            // same wherever it appears.
+            ZuniaWalletAvatar(
+              seed: wallet.active?.id ?? wallet.active?.name ?? 'Wallet',
+              size: 38,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -340,53 +312,13 @@ class _Drawer extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                s.accent.withValues(alpha: 0.24),
-                s.info.withValues(alpha: 0.1),
-              ],
-            ),
-          ),
-          child: Row(
-            children: [
-              Text(
-                'TOTAL',
-                style: zuniaMono(
-                  fontSize: 9,
-                  letterSpacing: 1.2,
-                  color: s.fgMuted,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                prefs.hideAmounts
-                    ? '••••'
-                    : '${accounts.length} chain${accounts.length == 1 ? '' : 's'}',
-                style: zuniaSans(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: s.fg,
-                ),
-              ),
-            ],
-          ),
-        ),
         const SizedBox(height: 14),
         const ZuniaSectionLabel('Explore'),
         const SizedBox(height: 6),
         ZuniaDrawerRow(
-          icon: Icons.apps_outlined,
-          label: 'Ecosystem',
-          active: ecosystemActive,
-          meta: apps?.toString(),
-          onTap: onEcosystem,
+          icon: Icons.receipt_long_outlined,
+          label: 'Activity',
+          onTap: onActivity,
         ),
         ZuniaDrawerRow(
           icon: Icons.hub_outlined,
@@ -407,23 +339,9 @@ class _Drawer extends ConsumerWidget {
           onTap: onCollectibles,
         ),
         ZuniaDrawerRow(
-          icon: Icons.how_to_vote_outlined,
-          label: 'Governance',
-          onTap: onGovernance,
-        ),
-        ZuniaDrawerRow(
-          icon: Icons.history,
-          label: 'Activity',
-          onTap: onActivity,
-        ),
-        ZuniaDrawerRow(
-          icon: Icons.savings_outlined,
-          label: 'Rewards',
-          onTap: onRewards,
-        ),
-        ZuniaDrawerRow(
           icon: Icons.star_outline,
           label: 'Missions',
+          meta: 'Soon',
           onTap: onMissions,
         ),
         const SizedBox(height: 14),
@@ -444,13 +362,6 @@ class _Drawer extends ConsumerWidget {
           icon: Icons.contacts_outlined,
           label: 'Address book',
           onTap: onAddressBook,
-        ),
-        ZuniaDrawerRow(
-          icon: Icons.notifications_none,
-          label: 'Notifications',
-          meta: unread > 0 ? '$unread' : null,
-          badge: unread > 0,
-          onTap: onNotifications,
         ),
         ZuniaDrawerRow(
           icon: Icons.settings_outlined,
@@ -480,7 +391,8 @@ class _Drawer extends ConsumerWidget {
   }
 }
 
-/// Missions moved off the tab bar; it opens from the drawer as a page.
+/// Missions are not live yet: the page says so instead of showing a
+/// checklist that earns nothing.
 class _MissionsPage extends StatelessWidget {
   const _MissionsPage();
 
@@ -488,12 +400,47 @@ class _MissionsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = ZuniaSemanticsExt.of(context);
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         child: ZuniaScreenScaffold(
           title: 'Missions',
           onBack: () => Navigator.of(context).pop(),
-          body: const MissionsTab(),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: s.accentGradient,
+                    ),
+                    child: const Icon(Icons.star_rounded, size: 36, color: Colors.white),
+                  ),
+                  const SizedBox(height: 22),
+                  Text(
+                    'Coming soon',
+                    style: zuniaSans(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.6,
+                      color: s.fg,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Missions will reward you for exploring the Cosmos with Zunia. '
+                    'They are not live yet.',
+                    textAlign: TextAlign.center,
+                    style: zuniaSans(fontSize: 15, height: 1.5, color: s.fgMuted),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -103,7 +103,7 @@ class ValidatorDetailScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(

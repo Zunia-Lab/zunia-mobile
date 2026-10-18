@@ -1037,6 +1037,10 @@ class _AmountCard extends StatelessWidget {
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    filled: false,
                     hintText: '0',
                     hintStyle: zuniaSans(fontSize: 30, fontWeight: FontWeight.w500, color: s.fgFaint),
                   ),

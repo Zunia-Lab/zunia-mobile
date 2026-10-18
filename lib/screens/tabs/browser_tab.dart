@@ -9,12 +9,17 @@ import 'package:zunia_mobile/screens/native_request_sheets.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
 import 'package:zunia_mobile/widgets/wallet_header.dart';
+import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// Discover: the curated dApps, the user's bookmarks and recent pages, and the
 /// way into the in-app browser. The list comes from `assets/browser/dapps.json`.
 class BrowserTab extends ConsumerStatefulWidget {
-  const BrowserTab({super.key});
+  const BrowserTab({super.key, this.asPage = false});
+
+  /// Opened from the menu as a page: a back control and a title instead of
+  /// the account header the root tabs carry.
+  final bool asPage;
 
   @override
   ConsumerState<BrowserTab> createState() => _BrowserTabState();
@@ -84,16 +89,18 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
     final curated = ref.watch(curatedDappsProvider);
     final connected = ref.watch(siteGrantsProvider).valueOrNull?.length ?? 0;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(gradient: s.screenGradient),
+    final page = ZuniaBackdrop(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          WalletHeader(
-            onOpenNetworks: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const NetworksScreen()),
+          if (widget.asPage)
+            const _PageHeader(title: 'Browser')
+          else
+            WalletHeader(
+              onOpenNetworks: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NetworksScreen()),
+              ),
             ),
-          ),
           Expanded(
             child: ZuniaRefresh(
               onRefresh: _refresh,
@@ -104,7 +111,7 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
                   Semantics(
                     header: true,
                     child: Text(
-                      'Discover',
+                      'Browser',
                       style: zuniaSans(fontSize: 22, fontWeight: FontWeight.w500, letterSpacing: -0.5, color: s.fg),
                     ),
                   ),
@@ -194,6 +201,11 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
         ],
       ),
     );
+    if (!widget.asPage) return page;
+    return Scaffold(
+      backgroundColor: zuniaGroundTop(context),
+      body: SafeArea(bottom: false, child: page),
+    );
   }
 
   List<Widget> _curated(BuildContext context, CuratedDapps data) {
@@ -249,6 +261,7 @@ class _BrowserTabState extends ConsumerState<BrowserTab> {
         for (final dapp in rows)
           _Row(
             icon: Icons.apps_rounded,
+            mark: _DappMark(name: dapp.name, host: dapp.host),
             title: dapp.name,
             subtitle: '${dapp.description} · ${dapp.host}',
             trailing: dapp.category,
@@ -374,6 +387,7 @@ class _Monogram extends StatelessWidget {
 class _Row extends StatelessWidget {
   const _Row({
     required this.icon,
+    this.mark,
     required this.title,
     required this.subtitle,
     required this.onTap,
@@ -382,6 +396,9 @@ class _Row extends StatelessWidget {
   });
 
   final IconData icon;
+
+  /// Replaces the icon tile (a dApp's own mark).
+  final Widget? mark;
   final String title;
   final String subtitle;
   final String? trailing;
@@ -411,13 +428,14 @@ class _Row extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), color: s.glass2),
-                    child: Icon(icon, size: 18, color: accent ? s.accent : s.fg),
-                  ),
+                  mark ??
+                      Container(
+                        width: 40,
+                        height: 40,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(borderRadius: BorderRadius.circular(11), color: s.glass2),
+                        child: Icon(icon, size: 20, color: accent ? s.accent : s.fg),
+                      ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -471,6 +489,95 @@ class _RowSkeleton extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A pushed page's header: the platform's back control and a title.
+class _PageHeader extends StatelessWidget {
+  const _PageHeader({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    final cupertino = ZuniaPlatform.isCupertino(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 16, 4),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: Icon(
+              cupertino ? Icons.arrow_back_ios_new_rounded : Icons.arrow_back,
+              size: cupertino ? 20 : 22,
+              color: s.fg,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              title,
+              style: zuniaSans(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.4,
+                color: s.fg,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A dApp's mark: its own touch icon when live reads are on (it comes from the
+/// site's server, like the site itself), otherwise, or when it has none, its
+/// initial on a tile coloured from its name.
+class _DappMark extends ConsumerWidget {
+  const _DappMark({required this.name, required this.host});
+
+  final String name;
+  final String host;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final live = ref.watch(preferencesProvider.select((p) => p.liveReads));
+    final hue = (name.codeUnits.fold<int>(7, (h, c) => (h * 31 + c) & 0xffff) % 360).toDouble();
+    final tile = Container(
+      width: 40,
+      height: 40,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(11),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            HSLColor.fromAHSL(1, hue, 0.62, 0.52).toColor(),
+            HSLColor.fromAHSL(1, (hue + 40) % 360, 0.7, 0.38).toColor(),
+          ],
+        ),
+      ),
+      child: Text(
+        name.isEmpty ? '?' : name.characters.first.toUpperCase(),
+        style: zuniaSans(fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white),
+      ),
+    );
+    if (!live || host.isEmpty) return tile;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(11),
+      child: Image.network(
+        'https://$host/apple-touch-icon.png',
+        width: 40,
+        height: 40,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stack) => tile,
+        frameBuilder: (context, child, frame, sync) => frame == null && !sync ? tile : child,
       ),
     );
   }

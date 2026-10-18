@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class SigningSettings {
   const SigningSettings({
     this.blindSigning = false,
-    this.exposeKeplrAlias = false,
+    this.exposeKeplrAlias = true,
     this.loaded = false,
   });
 
@@ -18,8 +18,10 @@ class SigningSettings {
   /// before any prompt opens ("Blind signing disabled for unknown messages").
   final bool blindSigning;
 
-  /// Also expose the provider as `window.keplr` in the in-app browser, for
-  /// dApps that only look for Keplr. Off: `window.zunia` only.
+  /// Also expose the provider as `window.keplr` in the in-app browser, so a
+  /// dApp that only looks for Keplr finds Zunia as it finds the extension.
+  /// On by default here, unlike the extension (where it would collide with an
+  /// installed Keplr): inside Zunia's own browser no other wallet competes.
   final bool exposeKeplrAlias;
 
   final bool loaded;
@@ -50,7 +52,7 @@ class SigningSettingsController extends StateNotifier<SigningSettings> {
     if (!mounted) return;
     state = state.copyWith(
       blindSigning: store.getBool(_kBlindSigning) ?? false,
-      exposeKeplrAlias: store.getBool(_kKeplrAlias) ?? false,
+      exposeKeplrAlias: store.getBool(_kKeplrAlias) ?? true,
       loaded: true,
     );
   }

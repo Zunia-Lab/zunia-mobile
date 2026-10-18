@@ -76,13 +76,18 @@ void main() {
       await tapText(tester, 'Not now');
     }
     await wait(tester, 12000);
+    // The one-time offer to turn on real-time notifications.
+    if (find.text('Turn on').evaluate().isNotEmpty) {
+      await shot(tester, '07a-notify-offer');
+      await tapText(tester, 'Not now');
+    }
     await shot(tester, '07-home');
 
     for (final (tab, name) in [
       ('Swap', '08-swap'),
-      ('Earn', '09-earn'),
-      ('Discover', '10-discover'),
-      ('Activity', '11-activity'),
+      ('Browser', '09-browser'),
+      ('Earn', '10-earn'),
+      ('Gov', '11-gov'),
     ]) {
       await tester.tap(find.text(tab).last);
       await wait(tester, 6000);
@@ -91,11 +96,31 @@ void main() {
 
     await tester.tap(find.text('Wallet').last);
     await wait(tester, 2000);
+    await tester.tap(find.byTooltip('Activity').first);
+    await wait(tester, 6000);
+    await shot(tester, '12-activity');
+    final rows = find.textContaining('Send ');
+    if (rows.evaluate().isNotEmpty) {
+      await tester.tap(rows.first);
+      await wait(tester, 6000);
+      await shot(tester, '13-tx-detail');
+      await tester.binding.handlePopRoute();
+      await wait(tester, 1500);
+    }
+    await tester.binding.handlePopRoute();
+    await wait(tester, 1500);
+
+    await tester.tap(find.byTooltip('Notifications').first);
+    await wait(tester, 2500);
+    await shot(tester, '14-notifications');
+    await tester.binding.handlePopRoute();
+    await wait(tester, 1500);
+
     await tester.tap(find.byTooltip('Menu').first);
     await wait(tester, 1500);
-    await shot(tester, '12-drawer');
+    await shot(tester, '15-drawer');
     await tapText(tester, 'Settings & security');
     await wait(tester, 2000);
-    await shot(tester, '13-settings');
+    await shot(tester, '16-settings');
   });
 }

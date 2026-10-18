@@ -131,9 +131,8 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen>
       ),
       child: Scaffold(
         backgroundColor: s.bg,
-        body: DecoratedBox(
-          decoration: BoxDecoration(gradient: s.screenGradient),
-          child: SafeArea(
+        body: ZuniaBackdrop(
+      child: SafeArea(
             bottom: false,
             child: Column(
               children: [

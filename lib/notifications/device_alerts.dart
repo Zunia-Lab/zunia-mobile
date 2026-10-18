@@ -82,14 +82,16 @@ int alertIdFor(String noticeId) {
   return hash & 0x7fffffff;
 }
 
+// High importance: a heads-up banner, as people expect for money arriving.
+// A channel's importance is fixed once created, hence the new id.
 const _androidChannel = AndroidNotificationDetails(
-  'zunia.notices',
+  'zunia.alerts',
   'Wallet notifications',
   channelDescription:
       'Tokens arriving, staking rewards ready to claim, governance deadlines '
       'and sites waiting for your approval.',
-  importance: Importance.defaultImportance,
-  priority: Priority.defaultPriority,
+  importance: Importance.high,
+  priority: Priority.high,
   category: AndroidNotificationCategory.status,
 );
 

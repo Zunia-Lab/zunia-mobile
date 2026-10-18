@@ -42,6 +42,8 @@ import 'package:zunia_mobile/widgets/chain_picker.dart';
 import 'package:zunia_mobile/widgets/search_field.dart';
 import 'package:zunia_mobile/widgets/token_widgets.dart';
 import 'package:zunia_mobile/widgets/wallet_header.dart';
+import 'package:zunia_mobile/notifications/device_alerts.dart';
+import 'package:zunia_mobile/notifications/notifications.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 enum _Segment { assets, staked, nfts }
@@ -73,11 +75,50 @@ class _HomeTabState extends ConsumerState<HomeTab> {
     super.initState();
     unawaited(_restoreLayout());
     _settled = ref.read(pendingTransfersProvider.notifier).settled.listen(_onSettled);
+    _offerTimer = Timer(const Duration(milliseconds: 1500), () {
+      unawaited(_offerNotifications());
+    });
+  }
+
+  Timer? _offerTimer;
+
+  static const _kNotifyOffered = 'zunia.notify.offered';
+
+  /// Once, shortly after the wallet first opens: ask whether to be told in
+  /// real time. Without this the system permission was only requested after a
+  /// stake, so most people never saw a banner. Settings > Notifications can
+  /// still turn them on or off later.
+  Future<void> _offerNotifications() async {
+    if (!mounted) return;
+    final store = await SharedPreferences.getInstance();
+    if (!mounted || (store.getBool(_kNotifyOffered) ?? false)) return;
+    final permission = await ref.read(alertPermissionProvider.future);
+    if (!mounted) return;
+    if (permission == AlertPermission.granted ||
+        permission == AlertPermission.unavailable) {
+      await store.setBool(_kNotifyOffered, true);
+      return;
+    }
+    await store.setBool(_kNotifyOffered, true);
+    if (!mounted) return;
+    final yes = await showZuniaConfirm(
+      context,
+      title: 'Get notified in real time?',
+      message: 'Zunia tells you when tokens arrive, a transfer lands or staking '
+          'rewards are ready. Notifications are made on this phone; nothing is '
+          'sent to a server.',
+      confirmLabel: 'Turn on',
+      cancelLabel: 'Not now',
+    );
+    if (!yes || !mounted) return;
+    final granted = await enableDeviceNotifications(ref);
+    if (granted) unawaited(ZuniaHaptics.success());
   }
 
   @override
   void dispose() {
     _settled?.cancel();
+    _offerTimer?.cancel();
     _query.dispose();
     super.dispose();
   }
@@ -161,7 +202,6 @@ class _HomeTabState extends ConsumerState<HomeTab> {
 
   @override
   Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
     final prefs = ref.watch(preferencesProvider);
     final accounts = ref.watch(chainAccountsProvider);
     final portfolio = ref.watch(portfolioProvider);
@@ -275,8 +315,7 @@ class _HomeTabState extends ConsumerState<HomeTab> {
       const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
     ];
 
-    return DecoratedBox(
-      decoration: BoxDecoration(gradient: s.screenGradient),
+    return ZuniaBackdrop(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -663,7 +702,31 @@ class _Hero extends StatelessWidget {
           children: [
             Text(
               'TOTAL BALANCE',
-              style: zuniaMono(fontSize: 10, letterSpacing: 1.4, color: s.fgMuted),
+              style: zuniaMono(fontSize: 10.5, letterSpacing: 1.4, color: s.fgMuted),
+            ),
+            // Hide amounts sits with the amounts it hides.
+            Consumer(
+              builder: (context, ref, _) {
+                final hide = ref.watch(preferencesProvider.select((p) => p.hideAmounts));
+                final cupertino = ZuniaPlatform.isCupertino(context);
+                return IconButton(
+                  tooltip: hide ? 'Show amounts' : 'Hide amounts',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  padding: EdgeInsets.zero,
+                  onPressed: () {
+                    ZuniaHaptics.selection();
+                    ref.read(preferencesProvider.notifier).toggleHideAmounts();
+                  },
+                  icon: Icon(
+                    hide
+                        ? (cupertino ? CupertinoIcons.eye_slash : Icons.visibility_off_outlined)
+                        : (cupertino ? CupertinoIcons.eye : Icons.visibility_outlined),
+                    size: 18,
+                    color: s.fgMuted,
+                  ),
+                );
+              },
             ),
             if (testnets > 0) ...[
               const SizedBox(width: 8),

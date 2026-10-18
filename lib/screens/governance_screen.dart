@@ -9,6 +9,8 @@ import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/ui/facts.dart';
 import 'package:zunia_mobile/ui/network_sheet.dart';
+import 'package:zunia_mobile/widgets/wallet_header.dart';
+import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// "Ends in 3d", "Ends in 5h", or null once it has ended.
@@ -34,7 +36,10 @@ String govStatusLabel(GovStatus status) => switch (status) {
 /// Governance across every enabled network: filter by network and status,
 /// search, scroll for more. Open votes come first.
 class GovernanceScreen extends ConsumerStatefulWidget {
-  const GovernanceScreen({super.key});
+  const GovernanceScreen({super.key, this.embedded = false});
+
+  /// Shown as a root tab: no back control.
+  final bool embedded;
 
   @override
   ConsumerState<GovernanceScreen> createState() => _GovernanceScreenState();
@@ -162,14 +167,10 @@ class _GovernanceScreenState extends ConsumerState<GovernanceScreen> {
         ? null
         : accounts.where((a) => a.chain.chainId == _network).firstOrNull?.chain;
 
-    return Scaffold(
-      backgroundColor: s.screenMid,
-      body: SafeArea(
-        bottom: false,
-        child: ZuniaScreenScaffold(
-          title: 'Governance',
-          onBack: () => Navigator.of(context).maybePop(),
-          trailing: openCount == 0
+    final content = ZuniaScreenScaffold(
+          title: widget.embedded ? null : 'Governance',
+          onBack: widget.embedded ? null : () => Navigator.of(context).maybePop(),
+          trailing: widget.embedded || openCount == 0
               ? null
               : Text(
                   '$openCount open',
@@ -314,8 +315,42 @@ class _GovernanceScreenState extends ConsumerState<GovernanceScreen> {
                         ],
                       ),
                     ),
-        ),
-      ),
+        );
+
+    if (widget.embedded) {
+      // A root tab: the account header and a title like Swap's and Earn's,
+      // on the shell's ground.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          WalletHeader(
+            onOpenNetworks: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const NetworksScreen()),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  'Governance',
+                  style: zuniaSans(fontSize: 26, fontWeight: FontWeight.w600, letterSpacing: -0.7, color: s.fg),
+                ),
+                const Spacer(),
+                if (openCount > 0)
+                  Text('$openCount open', style: zuniaMono(fontSize: 12, color: s.accent)),
+              ],
+            ),
+          ),
+          Expanded(child: content),
+        ],
+      );
+    }
+    return Scaffold(
+      backgroundColor: zuniaGroundTop(context),
+      body: SafeArea(bottom: false, child: content),
     );
   }
 }

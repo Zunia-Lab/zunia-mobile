@@ -960,6 +960,10 @@ class _AddressBar extends StatelessWidget {
                         decoration: InputDecoration(
                           isDense: true,
                           border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          filled: false,
                           hintText: 'Search or enter address',
                           hintStyle: zuniaSans(fontSize: 13.5, color: s.fgDim),
                         ),

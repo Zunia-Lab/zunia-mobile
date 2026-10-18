@@ -8,6 +8,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:zunia_mobile/activity/activity_model.dart';
 import 'package:zunia_mobile/activity/bundled_links.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
@@ -22,6 +23,7 @@ import 'package:zunia_mobile/tokens/token_amount.dart';
 import 'package:zunia_mobile/transfers/packet_walk.dart';
 import 'package:zunia_mobile/tx/tx_engine.dart';
 import 'package:zunia_mobile/widgets/activity_row.dart';
+import 'package:zunia_mobile/widgets/chain_avatar.dart';
 import 'package:zunia_mobile/widgets/portfolio_feedback.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
@@ -71,8 +73,11 @@ class TxDetailScreen extends ConsumerWidget {
     final presentation = zuniaActivityPresentation(context, kind: kind, success: success);
     final when = info?.timestamp ?? item.timestamp;
 
+    final statusLabel = !success ? 'Failed' : (info == null ? 'Confirmed' : 'Success');
+    final tone = success ? s.success : s.danger;
+
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(
@@ -84,88 +89,147 @@ class TxDetailScreen extends ConsumerWidget {
               ref.invalidate(packetWalkProvider(key));
             },
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+              // Sections are inset on their own (iOS grouped rows); the rest
+              // takes the same 16 pt margin through [_inset].
+              padding: const EdgeInsets.fromLTRB(0, 4, 0, 28),
               children: [
-                Center(
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: presentation.bg,
-                      border: Border.all(color: presentation.border),
-                    ),
-                    child: Text(presentation.icon,
-                        style: TextStyle(color: presentation.fg, fontSize: 24, fontWeight: FontWeight.w600)),
+                // The headline: what happened, how much, whether it went through.
+                _inset(Container(
+                  padding: const EdgeInsets.fromLTRB(18, 22, 18, 18),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(24),
+                    gradient: s.surfaceRaisedGradient,
+                    border: Border.all(color: s.line),
                   ),
-                ),
-                const SizedBox(height: 12),
-                Text(item.title,
-                    textAlign: TextAlign.center,
-                    style: zuniaSans(fontSize: 18, fontWeight: FontWeight.w500, color: s.fg)),
-                if (amount != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    amount,
-                    textAlign: TextAlign.center,
-                    style: zuniaSans(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: -0.6,
-                      color: zuniaActivityAmountColor(context, kind: kind, success: success, amount: amount),
-                      tabular: const FontFeature.tabularFigures(),
-                    ),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: presentation.bg,
+                          border: Border.all(color: presentation.border, width: 1.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: presentation.fg.withValues(alpha: 0.25 * s.bloom),
+                              blurRadius: 24,
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          presentation.icon,
+                          style: TextStyle(color: presentation.fg, fontSize: 26, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        item.title,
+                        textAlign: TextAlign.center,
+                        style: zuniaSans(fontSize: 17, fontWeight: FontWeight.w500, color: s.fgMuted),
+                      ),
+                      if (amount != null) ...[
+                        const SizedBox(height: 6),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            amount,
+                            textAlign: TextAlign.center,
+                            style: zuniaSans(
+                              fontSize: 32,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -1,
+                              color: zuniaActivityAmountColor(context, kind: kind, success: success, amount: amount),
+                              tabular: const FontFeature.tabularFigures(),
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _Chip(
+                            color: tone,
+                            fill: success ? s.successFill : s.dangerFill,
+                            icon: success ? Icons.check_circle_rounded : Icons.error_rounded,
+                            label: statusLabel,
+                          ),
+                          _Chip(
+                            color: s.fgMuted,
+                            fill: s.glass,
+                            leading: chain == null ? null : ChainAvatar(chain: chain, size: 16),
+                            label: chainName,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        _dateLabel(when),
+                        style: zuniaMono(fontSize: 11.5, color: s.fgDim),
+                      ),
+                    ],
                   ),
-                ],
-                const SizedBox(height: 6),
-                Text(
-                  '$chainName · ${_dateLabel(when)}',
-                  textAlign: TextAlign.center,
-                  style: zuniaMono(fontSize: 11, color: s.fgMuted),
-                ),
-                const SizedBox(height: 16),
-                if (!success)
-                  ZuniaCallout(
+                )),
+                const SizedBox(height: 14),
+                if (!success) ...[
+                  _inset(ZuniaCallout(
                     tone: ZuniaCalloutTone.danger,
                     title: '$chainName did not accept it',
                     body: explainChainError(info?.error ?? 'The chain reports this transaction as failed.'),
-                  ),
-                if (detail.isLoading && info == null) const _DetailSkeleton(),
-                if (detail.hasError)
-                  ZuniaCallout(
+                  )),
+                  const SizedBox(height: 12),
+                ],
+                if (detail.isLoading && info == null) _inset(const _DetailSkeleton()),
+                if (detail.hasError) ...[
+                  _inset(ZuniaCallout(
                     tone: ZuniaCalloutTone.warning,
                     title: 'Details unavailable',
                     body: detail.error is ChainReadException
                         ? '$chainName did not answer. ${(detail.error! as ChainReadException).failure.message}'
                         : '$chainName did not answer. Pull to try again.',
-                  ),
-                if (!detail.isLoading && !detail.hasError && info == null)
-                  ZuniaCallout(
+                  )),
+                  const SizedBox(height: 12),
+                ],
+                if (!detail.isLoading && !detail.hasError && info == null) ...[
+                  _inset(const ZuniaCallout(
                     tone: ZuniaCalloutTone.info,
                     title: 'Not on this node',
                     body: 'The node does not have this transaction. Public nodes prune old ones, so it may '
                         'only be on a block explorer.',
-                  ),
-                const SizedBox(height: 8),
+                  )),
+                  const SizedBox(height: 12),
+                ],
+                // Who sent to whom, one tap to copy each side.
+                if ((item.from ?? '').isNotEmpty || (item.to ?? '').isNotEmpty) ...[
+                  _inset(_Parties(from: item.from, to: item.to)),
+                  const SizedBox(height: 14),
+                ],
                 ZuniaListSection(
+                  header: 'Details',
                   children: [
                     ZuniaListTile(
-                      title: 'Status',
-                      value: success ? (info == null ? 'Confirmed' : 'Success') : 'Failed',
-                    ),
-                    ZuniaListTile(title: 'Network', value: chainName),
-                    ZuniaListTile(
                       title: 'Hash',
-                      subtitle: truncateAddress(item.hash, left: 10, right: 10),
-                      trailing: Icon(Icons.copy_rounded, size: 18, color: s.accent),
+                      subtitle: truncateAddress(item.hash, left: 12, right: 10),
+                      leading: Icons.tag_rounded,
+                      trailing: Icon(Icons.copy_rounded, size: 18, color: s.fgMuted),
                       onTap: () => copyWithFeedback(context, item.hash, 'Transaction hash'),
                     ),
-                    if (info?.height != null) ZuniaListTile(title: 'Block', value: info!.height),
-                    if (info != null) ZuniaListTile(title: 'Fee', value: _feeText(info, hidden)),
+                    if (info?.height != null)
+                      ZuniaListTile(title: 'Block', leading: Icons.view_in_ar_outlined, value: info!.height),
+                    if (info != null)
+                      ZuniaListTile(
+                        title: 'Network fee',
+                        leading: Icons.local_gas_station_outlined,
+                        value: _feeText(info, hidden),
+                      ),
                     for (final fee in info?.zuniaFees ?? const <DescribedMessage>[])
                       ZuniaListTile(
                         title: 'Zunia fee',
+                        leading: Icons.percent_rounded,
                         value: hidden
                             ? maskedAmount
                             : formatTokenAmount(
@@ -182,68 +246,92 @@ class TxDetailScreen extends ConsumerWidget {
                               ),
                       ),
                     if (info?.gasUsed != null)
-                      ZuniaListTile(title: 'Gas', value: '${info!.gasUsed} of ${info.gasWanted ?? '?'}'),
-                    if (info != null && info.memo.isNotEmpty) ZuniaListTile(title: 'Memo', subtitle: info.memo),
-                    if (item.from != null && item.from!.isNotEmpty)
                       ZuniaListTile(
-                        title: 'From',
-                        subtitle: truncateAddress(item.from!, left: 12, right: 8),
-                        onTap: () => copyWithFeedback(context, item.from!, 'Address'),
+                        title: 'Gas',
+                        leading: Icons.speed_rounded,
+                        subtitle: '${info!.gasUsed} used of ${info.gasWanted ?? '?'}',
+                        trailing: _GasBar(used: info.gasUsed, wanted: info.gasWanted),
                       ),
-                    if (item.to != null && item.to!.isNotEmpty)
-                      ZuniaListTile(
-                        title: 'To',
-                        subtitle: truncateAddress(item.to!, left: 12, right: 8),
-                        onTap: () => copyWithFeedback(context, item.to!, 'Address'),
-                      ),
+                    if (info != null && info.memo.isNotEmpty)
+                      ZuniaListTile(title: 'Memo', leading: Icons.notes_rounded, subtitle: info.memo),
                   ],
                 ),
                 if (info != null && info.messages.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  const ZuniaSectionLabel('Messages'),
-                  const SizedBox(height: 6),
-                  for (final message in info.messages)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 5),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            margin: const EdgeInsets.only(top: 2),
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: s.glass2,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(message.type, style: zuniaMono(fontSize: 10, color: s.fgMuted)),
+                  const SizedBox(height: 8),
+                  ZuniaListSection(
+                    header: info.messages.length == 1 ? 'Message' : '${info.messages.length} messages',
+                    children: [
+                      for (final message in info.messages)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                hidden && message.described.amount != null
+                                    ? message.described.title
+                                    : message.described.summary,
+                                style: zuniaSans(fontSize: 14.5, height: 1.4, color: s.fg),
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: s.glass2,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(message.type, style: zuniaMono(fontSize: 10.5, color: s.fgMuted)),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              hidden && message.described.amount != null ? message.described.title : message.described.summary,
-                              style: zuniaSans(fontSize: 13, height: 1.4, color: s.fg),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                        ),
+                    ],
+                  ),
                 ],
                 if (info != null && info.packets.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  _IbcSteps(walkKey: key, sourceChainId: item.chainId, txHash: item.hash),
+                  _inset(_IbcSteps(walkKey: key, sourceChainId: item.chainId, txHash: item.hash)),
                 ],
               ],
             ),
           ),
-          footer: url == null
-              ? null
-              : ZuniaButton(
-                  label: 'View on explorer',
-                  variant: ZuniaButtonVariant.secondary,
-                  leading: const Icon(Icons.open_in_new_rounded),
-                  onPressed: () => openExternal(context, url),
+          footer: Row(
+            children: [
+              if (url != null) ...[
+                Expanded(
+                  child: ZuniaButton(
+                    label: 'Explorer',
+                    variant: ZuniaButtonVariant.secondary,
+                    leading: const Icon(Icons.open_in_new_rounded),
+                    onPressed: () => openExternal(context, url),
+                  ),
                 ),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                child: ZuniaButton(
+                  label: 'Share',
+                  variant: ZuniaButtonVariant.secondary,
+                  leading: Icon(ZuniaPlatform.isCupertino(context) ? Icons.ios_share_rounded : Icons.share_rounded),
+                  onPressed: () => _share(context, url ?? item.hash),
+                ),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  static Widget _inset(Widget child) =>
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: child);
+
+  static Future<void> _share(BuildContext context, String text) async {
+    final box = context.findRenderObject() as RenderBox?;
+    await SharePlus.instance.share(
+      ShareParams(
+        text: text,
+        sharePositionOrigin: box == null ? null : box.localToGlobal(Offset.zero) & box.size,
       ),
     );
   }
@@ -337,4 +425,106 @@ class _DetailSkeleton extends StatelessWidget {
           ],
         ),
       );
+}
+
+class _Chip extends StatelessWidget {
+  const _Chip({required this.color, required this.fill, required this.label, this.icon, this.leading});
+
+  final Color color;
+  final Color fill;
+  final String label;
+  final IconData? icon;
+  final Widget? leading;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(color: fill, borderRadius: BorderRadius.circular(999)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) Icon(icon, size: 15, color: color),
+            ?leading,
+            const SizedBox(width: 6),
+            Text(label, style: zuniaSans(fontSize: 13, fontWeight: FontWeight.w500, color: color)),
+          ],
+        ),
+      );
+}
+
+/// From and To, each a tappable block that copies the address.
+class _Parties extends StatelessWidget {
+  const _Parties({this.from, this.to});
+
+  final String? from;
+  final String? to;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    Widget side(String label, String? address) {
+      final value = (address ?? '').isEmpty ? '—' : truncateAddress(address!, left: 8, right: 6);
+      return Expanded(
+        child: Material(
+          color: s.glass,
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: (address ?? '').isEmpty ? null : () => copyWithFeedback(context, address!, 'Address'),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: zuniaMono(fontSize: 10.5, letterSpacing: 1.1, color: s.fgDim)),
+                  const SizedBox(height: 6),
+                  Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: zuniaMono(fontSize: 12.5, color: s.fg)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        side('FROM', from),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Icon(Icons.arrow_forward_rounded, size: 18, color: s.fgMuted),
+        ),
+        side('TO', to),
+      ],
+    );
+  }
+}
+
+/// How much of the gas limit the transaction used.
+class _GasBar extends StatelessWidget {
+  const _GasBar({required this.used, this.wanted});
+
+  final String? used;
+  final String? wanted;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    final u = double.tryParse(used ?? '');
+    final w = double.tryParse(wanted ?? '');
+    if (u == null || w == null || w <= 0) return const SizedBox.shrink();
+    final ratio = (u / w).clamp(0.0, 1.0);
+    return SizedBox(
+      width: 56,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: LinearProgressIndicator(
+          value: ratio,
+          minHeight: 6,
+          backgroundColor: s.glass2,
+          color: ratio > 0.95 ? s.warning : s.accent,
+        ),
+      ),
+    );
+  }
 }

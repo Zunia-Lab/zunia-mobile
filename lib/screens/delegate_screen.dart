@@ -170,7 +170,7 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
         ?.address;
     if (chain == null || delegator == null) {
       return Scaffold(
-        backgroundColor: s.screenMid,
+        backgroundColor: zuniaGroundTop(context),
         body: SafeArea(
           child: ZuniaScreenScaffold(
             title: _stake ? 'Stake' : 'Unstake',
@@ -232,7 +232,7 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
     final units = ready ? BigInt.parse(input.baseUnits) : null;
 
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(
@@ -313,6 +313,7 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
                   ),
                   decoration: InputDecoration(
                     border: InputBorder.none,
+                    disabledBorder: InputBorder.none,
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
                     filled: false,

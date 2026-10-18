@@ -142,9 +142,8 @@ class _EarnTabState extends ConsumerState<EarnTab> {
     final prefs = ref.watch(preferencesProvider);
     final accounts = ref.watch(chainAccountsProvider);
 
-    Widget shell(Widget child) => DecoratedBox(
-          decoration: BoxDecoration(gradient: s.screenGradient),
-          child: Column(
+    Widget shell(Widget child) => ZuniaBackdrop(
+      child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               WalletHeader(

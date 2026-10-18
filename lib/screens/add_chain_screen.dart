@@ -186,7 +186,7 @@ class _AddChainScreenState extends ConsumerState<AddChainScreen> {
         _name.text.isNotEmpty;
 
     return Scaffold(
-      backgroundColor: s.screenMid,
+      backgroundColor: zuniaGroundTop(context),
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(

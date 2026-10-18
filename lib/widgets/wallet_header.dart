@@ -1,8 +1,10 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/notifications/notifications.dart';
+import 'package:zunia_mobile/screens/activity_screen.dart';
+import 'package:zunia_mobile/screens/notifications_screen.dart';
 import 'package:zunia_mobile/screens/pair_device.dart';
-import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/widgets/wallet_switcher_sheet.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -22,8 +24,8 @@ class WalletHeader extends ConsumerWidget {
 }
 
 /// Home's header: the account (avatar and name, tap to switch), how many
-/// networks it reads, and the three things Home does from the top: scan a
-/// code, hide amounts, and open the menu.
+/// networks it reads, then activity, notifications (with the live unread
+/// count), the scanner and the menu.
 class HomeHeader extends ConsumerWidget {
   const HomeHeader({super.key, required this.onScan});
 
@@ -33,7 +35,11 @@ class HomeHeader extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ZuniaSemanticsExt.of(context);
     final wallet = ref.watch(walletProvider);
-    final hidden = ref.watch(preferencesProvider.select((p) => p.hideAmounts));
+    // The root shell runs the notice engine; a header shown on its own (a
+    // test, a pushed page before the shell) does not start chain sockets.
+    final unread = ref.exists(noticeEngineProvider)
+        ? ref.watch(unreadNoticeCountProvider)
+        : 0;
     final cupertino = ZuniaPlatform.isCupertino(context);
     final name = wallet.active?.name ?? 'Wallet';
     final networks = wallet.enabledChainIds.length;
@@ -117,19 +123,36 @@ class HomeHeader extends ConsumerWidget {
             ),
           ),
           action(
+            label: 'Activity',
+            icon: cupertino ? CupertinoIcons.clock : Icons.history,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const ActivityScreen()),
+            ),
+          ),
+          // Live: the notice engine updates the count as chains report.
+          IconButton(
+            tooltip: unread == 0 ? 'Notifications' : 'Notifications, $unread unread',
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            padding: EdgeInsets.zero,
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const NotificationsScreen()),
+            ),
+            icon: Badge(
+              isLabelVisible: unread > 0,
+              label: Text(unread > 99 ? '99+' : '$unread'),
+              backgroundColor: s.accent,
+              textColor: Colors.white,
+              child: Icon(
+                cupertino ? CupertinoIcons.bell : Icons.notifications_none_rounded,
+                size: 22,
+                color: s.fg,
+              ),
+            ),
+          ),
+          action(
             label: 'Scan a code',
             icon: cupertino ? CupertinoIcons.qrcode_viewfinder : Icons.qr_code_scanner,
             onTap: onScan,
-          ),
-          action(
-            label: hidden ? 'Show amounts' : 'Hide amounts',
-            icon: hidden
-                ? (cupertino ? CupertinoIcons.eye_slash : Icons.visibility_off_outlined)
-                : (cupertino ? CupertinoIcons.eye : Icons.visibility_outlined),
-            onTap: () {
-              ZuniaHaptics.selection();
-              ref.read(preferencesProvider.notifier).toggleHideAmounts();
-            },
           ),
           action(
             label: 'Menu',

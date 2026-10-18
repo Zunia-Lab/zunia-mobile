@@ -595,9 +595,7 @@ class _Shell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(gradient: s.screenGradient),
+    return ZuniaBackdrop(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -934,6 +932,10 @@ class _PayCard extends StatelessWidget {
                       decoration: InputDecoration(
                         isDense: true,
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        filled: false,
                         hintText: '0',
                         hintStyle: zuniaSans(
                           fontSize: 28,
