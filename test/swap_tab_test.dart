@@ -164,6 +164,14 @@ void main() {
       now = now.add(const Duration(seconds: 3));
       await tester.pump(const Duration(seconds: 1));
       expect(find.text('Price updates in 17s'), findsOneWidget);
+
+      // Past twenty seconds the form fetches a new price on its own.
+      now = now.add(const Duration(seconds: 18));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(c.read(swapViewProvider).quotedAt, now);
+      expect(find.text('Price updates in 20s'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );

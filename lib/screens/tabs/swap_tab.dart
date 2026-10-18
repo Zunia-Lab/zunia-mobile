@@ -135,7 +135,20 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
     final wanted = view.quotedAt != null;
     if (wanted && _ticker == null) {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (mounted && _visible()) setState(() {});
+        if (!mounted || !_visible()) return;
+        setState(() {});
+        // Back on screen after the price ran out (the review was open, or the
+        // app was away): fetch a new one rather than wait for a tap.
+        final current = ref.read(swapViewProvider);
+        final at = current.quotedAt;
+        final ttl = current.data?.config.quoteTtl;
+        if (at != null &&
+            ttl != null &&
+            !current.refreshing &&
+            current.planKey.isNotEmpty &&
+            ref.read(swapClockProvider)().difference(at) >= ttl) {
+          unawaited(_controller.refresh(current));
+        }
       });
     } else if (!wanted && _ticker != null) {
       _ticker?.cancel();
