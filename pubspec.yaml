@@ -59,6 +59,7 @@ flutter:
     - assets/brand/splash-mark.png
     - assets/brand/splash-lockup.png
     - assets/chains/catalog.json
+    - assets/data/
     - config/mnemonic_security.yaml
     - config/connect.yaml
   fonts:
