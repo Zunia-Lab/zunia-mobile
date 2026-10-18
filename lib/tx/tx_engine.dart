@@ -190,8 +190,17 @@ class TxEngine {
   }
 
   /// The same quote at another speed, without simulating again.
-  TxQuote reprice(TxQuote quote, FeeSpeed speed) {
-    final fee = feeFor(quote.chain, quote.fee.gasLimit, speed);
+  ///
+  /// A new [gasAdjustment] re-scales the simulated gas (`gasUsed × adjustment`)
+  /// so the fee preference can change on the review without a second
+  /// simulation; a quote whose chain would not simulate keeps its fixed limit.
+  TxQuote reprice(TxQuote quote, FeeSpeed speed, {double? gasAdjustment}) {
+    final adjustment = gasAdjustment ?? quote.gasAdjustment;
+    final used = quote.gasUsed;
+    final gasLimit = used != null && gasAdjustment != null
+        ? (used * adjustment).ceil()
+        : quote.fee.gasLimit;
+    final fee = feeFor(quote.chain, gasLimit, speed);
     final preview = _kernel.core.previewTx(
       chainId: quote.chain.chainId,
       msgs: [for (final m in quote.msgs) m.toJson()],
@@ -212,7 +221,7 @@ class TxEngine {
       sequence: quote.sequence,
       fee: fee,
       speed: speed,
-      gasAdjustment: quote.gasAdjustment,
+      gasAdjustment: adjustment,
       preview: preview,
       publicKeyHex: quote.publicKeyHex,
       gasUsed: quote.gasUsed,

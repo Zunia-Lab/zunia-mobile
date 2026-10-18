@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zunia_mobile/activity/bundled_links.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/providers.dart';
@@ -16,6 +19,8 @@ import 'package:zunia_mobile/security/vault_session.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
 import 'package:zunia_mobile/services/push_messaging.dart';
 import 'package:zunia_mobile/state/preferences.dart';
+import 'package:zunia_mobile/tokens/token_identity.dart';
+import 'package:zunia_mobile/tokens/token_registry.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 Future<void> main() async {
@@ -33,6 +38,11 @@ Future<void> main() async {
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // Chain metadata backs address derivation, so nothing can render before it.
   await ChainCatalog.load();
+  // Token names (the hash-verified table) are read synchronously by every
+  // balance row; the proven traces and explorer links can arrive a moment later.
+  await TokenRegistry.load();
+  unawaited(hydrateTokenIdentities());
+  unawaited(loadBundledLinks());
   // AppRestart: removing the wallet starts the app over with fresh providers.
   runApp(
     AppRestart(
