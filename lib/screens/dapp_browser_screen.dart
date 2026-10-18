@@ -47,6 +47,11 @@ class DappBrowserScreen extends ConsumerStatefulWidget {
   final String initialUrl;
   final String? title;
 
+  /// The open page's WebView, for integration tests that drive a real site.
+  /// Only set in debug builds.
+  @visibleForTesting
+  static final debugWebView = ValueNotifier<InAppWebViewController?>(null);
+
   static Future<void> open(
     BuildContext context, {
     required String url,
@@ -258,6 +263,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     _queue.dispose();
     _urlController.dispose();
     _urlFocus.dispose();
+    if (DappBrowserScreen.debugWebView.value == _web) DappBrowserScreen.debugWebView.value = null;
     super.dispose();
   }
 
@@ -744,6 +750,10 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       initialUserScripts: UnmodifiableListView([_providerScript(keplr)]),
       onWebViewCreated: (controller) {
         _web = controller;
+        assert(() {
+          DappBrowserScreen.debugWebView.value = controller;
+          return true;
+        }());
         controller.addJavaScriptHandler(handlerName: kProviderHandlerName, callback: _onProviderCall);
       },
       shouldOverrideUrlLoading: (controller, action) => _onNav(action),

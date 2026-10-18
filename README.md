@@ -151,6 +151,8 @@ config/                     # core_native.env, connect, interchain, security pol
 | `flutter run` | Debug on device/simulator |
 | `flutter test` | Unit and widget tests (build the host kernel first) |
 | `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/tour_test.dart -d <device>` | Walk a real build and save screenshots to `build/shots` (never signs) |
+| `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/browser_check_test.dart -d <device>` | Check what web dApps see in the in-app browser, then connect the live dashboard through it (never signs) |
+| `ZUNIA_LIVE=1 flutter test test/e2e/live_connect_test.dart` | Pair the published `zunia_sdk` with the app's Connect code over the production relay; with `ZUNIA_PAIR_FILE`, approve a link another dApp writes there |
 | `node scripts/sync-extension-data.mjs` | Refresh `assets/data/` from the extension |
 | `flutter analyze` | Static analysis |
 | `./scripts/fetch-native.sh` | Download pinned zunia-core natives |

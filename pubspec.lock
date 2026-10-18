@@ -1203,6 +1203,14 @@ packages:
       relative: true
     source: path
     version: "0.1.1"
+  zunia_sdk:
+    dependency: "direct dev"
+    description:
+      name: zunia_sdk
+      sha256: "40e4889a3f7f93df52cbd3a5e273c9faa51a1db899ad3336c632405e4b946bcd"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.1"
   zunia_tokens:
     dependency: "direct main"
     description:
