@@ -1,0 +1,11 @@
+{
+  "extensionVersion": "0.1.5",
+  "extensionCommit": "8e44b4974221122394d8cb6fcc441288d9afb502",
+  "files": {
+    "token-registry.json": "08b4892953d7ca3806f617252e3a27f0d5168bdde44d6db27391aead53290903",
+    "ibc-channels.json": "89960a58b67125ec2a914bdba42e7aa663edf2f9d0b1a4012ebf99a152cabd21",
+    "swap-fee.json": "ee6164244d2a35f47cf493bb06989536ea471df21a92af0321aebf65977fb807",
+    "interchain.json": "32e3b1065f501b728db8b43a8fe17df95f408a1fced269b588332b25690aff41",
+    "prices.json": "a31793a92f2358db8c8ff666136d7fc57af902f345deeb6442c24c832e888263"
+  }
+}

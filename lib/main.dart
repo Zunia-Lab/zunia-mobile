@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
+import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/onboarding_screen.dart';
 import 'package:zunia_mobile/screens/root_shell.dart';
@@ -16,6 +18,17 @@ import 'package:zunia_ui/zunia_ui.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Draw under the status and navigation bars, as Android 15 requires and as
+  // every native app does; screens pad themselves with SafeArea.
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      statusBarColor: Colors.transparent,
+    ),
+  );
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // Chain metadata backs address derivation, so nothing can render before it.
   await ChainCatalog.load();
   runApp(const ProviderScope(child: ZuniaApp()));
@@ -92,6 +105,10 @@ class _AppGate extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Without the kernel nothing can be derived, opened or signed.
+    if (!WalletKernel.instance.isAvailable) {
+      return KernelMissingScreen(reason: WalletKernel.instance.loadError);
+    }
     final session = ref.watch(sessionProvider);
     if (session != null) {
       return const RootShell();
@@ -112,6 +129,43 @@ class _AppGate extends ConsumerWidget {
       },
       loading: () => const SplashScreen(),
       error: (e, _) => SplashScreen(message: 'Startup error: $e'),
+    );
+  }
+}
+
+/// Shown instead of the wallet when the build is missing its signing core.
+class KernelMissingScreen extends StatelessWidget {
+  const KernelMissingScreen({super.key, this.reason});
+
+  final String? reason;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    return Scaffold(
+      backgroundColor: s.screenMid,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ZuniaCallout(
+                tone: ZuniaCalloutTone.danger,
+                title: 'This build cannot sign',
+                body: 'Its signing core (zunia-core) did not load, so Zunia will not '
+                    'open your wallet. Install the app from the App Store or Google '
+                    'Play. Your recovery phrase is not affected.',
+              ),
+              if (reason != null) ...[
+                const SizedBox(height: 16),
+                Text(reason!, style: zuniaMono(fontSize: 11, color: s.fgDim)),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/connect/wallet_signer.dart';
@@ -41,11 +42,44 @@ class RootShell extends ConsumerStatefulWidget {
 
 class _RootShellState extends ConsumerState<RootShell> {
   static const _tabs = [
-    (id: 'home', label: 'Home', icon: Icons.home_outlined),
-    (id: 'earn', label: 'Earn', icon: Icons.diamond_outlined),
-    (id: 'swap', label: 'Swap', icon: Icons.swap_horiz),
-    (id: 'missions', label: 'Missions', icon: Icons.star_outline),
-    (id: 'browser', label: 'Browser', icon: Icons.travel_explore_outlined),
+    ZuniaTabItem(
+      id: 'home',
+      label: 'Wallet',
+      icon: Icons.account_balance_wallet_outlined,
+      activeIcon: Icons.account_balance_wallet,
+      cupertinoIcon: CupertinoIcons.house,
+      cupertinoActiveIcon: CupertinoIcons.house_fill,
+    ),
+    ZuniaTabItem(
+      id: 'swap',
+      label: 'Swap',
+      icon: Icons.swap_horiz_rounded,
+      cupertinoIcon: CupertinoIcons.arrow_right_arrow_left,
+    ),
+    ZuniaTabItem(
+      id: 'earn',
+      label: 'Earn',
+      icon: Icons.savings_outlined,
+      activeIcon: Icons.savings,
+      cupertinoIcon: CupertinoIcons.graph_circle,
+      cupertinoActiveIcon: CupertinoIcons.graph_circle_fill,
+    ),
+    ZuniaTabItem(
+      id: 'browser',
+      label: 'Discover',
+      icon: Icons.explore_outlined,
+      activeIcon: Icons.explore,
+      cupertinoIcon: CupertinoIcons.compass,
+      cupertinoActiveIcon: CupertinoIcons.compass_fill,
+    ),
+    ZuniaTabItem(
+      id: 'activity',
+      label: 'Activity',
+      icon: Icons.receipt_long_outlined,
+      activeIcon: Icons.receipt_long,
+      cupertinoIcon: CupertinoIcons.clock,
+      cupertinoActiveIcon: CupertinoIcons.clock_fill,
+    ),
   ];
 
   String _tab = 'home';
@@ -186,6 +220,7 @@ class _RootShellState extends ConsumerState<RootShell> {
           onCollectibles: () => _fromDrawer(const NftCollectionScreen()),
           onGovernance: () => _fromDrawer(const GovernanceScreen()),
           onActivity: () => _fromDrawer(const ActivityScreen()),
+          onMissions: () => _fromDrawer(const _MissionsPage()),
           onRewards: () => _fromDrawer(const RewardsScreen()),
           onPair: () {
             final nav = Navigator.of(context);
@@ -270,66 +305,22 @@ class _RootShellState extends ConsumerState<RootShell> {
             );
           },
         ),
+        bottomNavigationBar: ZuniaNavigationBar(
+          items: _tabs,
+          value: _tab,
+          onChanged: (v) => setState(() => _tab = v),
+        ),
         body: SafeArea(
           bottom: false,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // Floating dock height ≈ pill + outer padding + home indicator.
-              // Keep this ahead of content so cards never peek under the bar.
-              final dockClearance =
-                  78.0 + MediaQuery.viewPaddingOf(context).bottom;
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: Padding(
-                      padding: EdgeInsets.only(bottom: dockClearance),
-                      child: IndexedStack(
-                        index: index < 0 ? 0 : index,
-                        children: const [
-                          HomeTab(),
-                          EarnTab(),
-                          SwapTab(),
-                          MissionsTab(),
-                          BrowserTab(),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: IgnorePointer(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              s.bg.withValues(alpha: 0),
-                              s.bg.withValues(alpha: 0.72),
-                              s.bg,
-                            ],
-                            stops: const [0, 0.45, 1],
-                          ),
-                        ),
-                        child: SizedBox(height: dockClearance + 12),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: ZuniaTabBar(
-                      items: _tabs,
-                      value: _tab,
-                      onChanged: (v) => setState(() => _tab = v),
-                    ),
-                  ),
-                ],
-              );
-            },
+          child: IndexedStack(
+            index: index < 0 ? 0 : index,
+            children: const [
+              HomeTab(),
+              SwapTab(),
+              EarnTab(),
+              BrowserTab(),
+              ActivityScreen(embedded: true),
+            ],
           ),
         ),
       ),
@@ -346,6 +337,7 @@ class _Drawer extends ConsumerWidget {
     required this.onCollectibles,
     required this.onGovernance,
     required this.onActivity,
+    required this.onMissions,
     required this.onRewards,
     required this.onPair,
     required this.onSessions,
@@ -362,6 +354,7 @@ class _Drawer extends ConsumerWidget {
   final VoidCallback onCollectibles;
   final VoidCallback onGovernance;
   final VoidCallback onActivity;
+  final VoidCallback onMissions;
   final VoidCallback onRewards;
   final VoidCallback onPair;
   final VoidCallback onSessions;
@@ -509,6 +502,11 @@ class _Drawer extends ConsumerWidget {
           label: 'Rewards',
           onTap: onRewards,
         ),
+        ZuniaDrawerRow(
+          icon: Icons.star_outline,
+          label: 'Missions',
+          onTap: onMissions,
+        ),
         const SizedBox(height: 14),
         const ZuniaSectionLabel('Wallet'),
         const SizedBox(height: 6),
@@ -558,4 +556,24 @@ class _Drawer extends ConsumerWidget {
   }
 
   static int _appsCount() => 6;
+}
+
+/// Missions moved off the tab bar; it opens from the drawer as a page.
+class _MissionsPage extends StatelessWidget {
+  const _MissionsPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    return Scaffold(
+      backgroundColor: s.screenMid,
+      body: SafeArea(
+        child: ZuniaScreenScaffold(
+          title: 'Missions',
+          onBack: () => Navigator.of(context).pop(),
+          body: const MissionsTab(),
+        ),
+      ),
+    );
+  }
 }

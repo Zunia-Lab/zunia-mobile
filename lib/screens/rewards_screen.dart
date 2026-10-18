@@ -73,7 +73,6 @@ class _RewardsScreenState extends ConsumerState<RewardsScreen> {
                 validatorAddress: d.validatorAddress,
               ),
           ],
-          gasLimit: (claimable.length * 120000).clamp(250000, 2000000),
         );
       }
       if (!mounted) return;

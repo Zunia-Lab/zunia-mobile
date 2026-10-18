@@ -10,7 +10,10 @@ import 'package:zunia_ui/zunia_ui.dart';
 
 /// Transfers and signatures across every enabled chain, grouped by day.
 class ActivityScreen extends ConsumerStatefulWidget {
-  const ActivityScreen({super.key});
+  const ActivityScreen({super.key, this.embedded = false});
+
+  /// Shown as a root tab: no back control.
+  final bool embedded;
 
   @override
   ConsumerState<ActivityScreen> createState() => _ActivityScreenState();
@@ -90,7 +93,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
       body: SafeArea(
         child: ZuniaScreenScaffold(
           title: 'Activity',
-          onBack: () => Navigator.of(context).pop(),
+          onBack: widget.embedded ? null : () => Navigator.of(context).pop(),
           trailing: Text(
             'All chains',
             style: zuniaMono(fontSize: 11, color: s.info),
