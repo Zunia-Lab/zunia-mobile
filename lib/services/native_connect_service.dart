@@ -41,11 +41,28 @@ typedef ReturnLauncher = Future<bool> Function(Uri url);
 
 Future<WebSocket> _openSocket(Uri url, List<String> protocols) {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
-  return WebSocket.connect(
-    url.toString(),
-    protocols: protocols,
-    customClient: client,
+  // When the relay closes a session, dart:io's TLS layer can throw "Reading
+  // from a closed socket" from its own callbacks. That error goes to the zone
+  // that opened the socket, not to the socket's stream, so it would surface as
+  // unhandled wherever pairing started. It is kept here instead.
+  final opened = Completer<WebSocket>();
+  runZonedGuarded(
+    () => WebSocket.connect(
+      url.toString(),
+      protocols: protocols,
+      customClient: client,
+    ).then(opened.complete, onError: (Object error, StackTrace stack) {
+      if (!opened.isCompleted) opened.completeError(error, stack);
+    }),
+    (error, stack) {
+      if (!opened.isCompleted) {
+        opened.completeError(error, stack);
+      } else {
+        developer.log('Relay socket after close: $error', name: 'zunia.connect');
+      }
+    },
   );
+  return opened.future;
 }
 
 Future<bool> _launchExternal(Uri url) =>
