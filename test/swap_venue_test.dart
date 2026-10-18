@@ -1,25 +1,23 @@
 /// The crosschain-swaps contract is checked before it is trusted.
 ///
 /// This address is the one field in the whole flow where a wrong value loses
-/// funds silently: a memo naming a contract that does not exist, or that exists
-/// and is not the swap router, sends the packet somewhere nothing will send it
-/// back from. So the build ships without an address, and even when one is
-/// configured it is confirmed against the chain before a memo is built.
-///
-/// The second group only runs when the address is supplied, so the suite is
-/// meaningful in both builds:
-///
-///   flutter test test/swap_venue_test.dart
-///   flutter test --dart-define=OSMOSIS_XCS_CONTRACT=osmo1example \
-///     test/swap_venue_test.dart
+/// funds silently: a memo naming a contract that does not exist, or that
+/// exists and is not the swap router, sends the packet somewhere nothing will
+/// send it back from. The release names candidates
+/// (`assets/data/interchain.json` `xcsContractCandidates`); each is confirmed
+/// against the chain before the contract path is enabled, and the first one
+/// the chain knows is used.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zunia_mobile/config/interchain_config.dart';
-import 'package:zunia_mobile/services/interchain/lcd.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/state/interchain.dart';
+import 'package:zunia_mobile/swap/swap_config.dart';
+import 'package:zunia_mobile/swap/swap_data.dart';
+
+import 'support/swap_fixtures.dart';
 
 class _Registry implements ChainRegistry {
   const _Registry({this.rest = 'https://lcd.osmosis.test'});
@@ -27,7 +25,7 @@ class _Registry implements ChainRegistry {
   final String? rest;
 
   @override
-  ChainInfo? get(String chainId) => chainId == kSwapVenueChainId
+  ChainInfo? get(String chainId) => chainId == 'osmosis-1'
       ? ChainInfo(
           chainId: chainId,
           chainName: 'Osmosis',
@@ -38,124 +36,182 @@ class _Registry implements ChainRegistry {
       : null;
 
   @override
-  List<ChainInfo> list() => [if (get(kSwapVenueChainId) != null) get(kSwapVenueChainId)!];
-}
-
-class _FakeLcd implements LcdClient {
-  _FakeLcd(this.chainId, this._answer);
-
-  @override
-  final String chainId;
-  final Object? Function(String path) _answer;
-
-  @override
-  Future<Object?> getJson(String path, [LcdRequestOptions? options]) async =>
-      _answer(path);
-}
-
-ProviderContainer _container({
-  required Object? Function(String path) answer,
-  String? rest = 'https://lcd.osmosis.test',
-}) {
-  final container = ProviderContainer(
-    overrides: [
-      interchainRegistryProvider.overrideWithValue(_Registry(rest: rest)),
-      lcdFactoryProvider.overrideWithValue(
-        (chain) => _FakeLcd(chain.chainId, answer),
-      ),
-    ],
-  );
-  addTearDown(container.dispose);
-  return container;
+  List<ChainInfo> list() => [?get('osmosis-1')];
 }
 
 void main() {
-  test('the shipped default is no address at all', () {
-    // A constant here would be a promise nobody verified. INTERCHAIN-SPEC.md
-    // lists two candidate addresses and calls both unverified.
-    if (kOsmosisXcsContract.isEmpty) {
-      expect(kOsmosisXcsContract, isEmpty);
-    } else {
-      // A build that supplies one is fine; this test only pins that the value
-      // comes from configuration rather than from source.
+  late SwapData shipped;
+  final second = bech('osmo', 4, 32);
+
+  setUpAll(() async => shipped = await loadTestSwapData());
+
+  SwapData withCandidates(List<String> candidates) {
+    final c = shipped.config;
+    return SwapData(
+      config: SwapConfig(
+        venueChainId: c.venueChainId,
+        xcsContractCandidates: candidates,
+        routerEndpoints: c.routerEndpoints,
+        defaultSlippagePercent: c.defaultSlippagePercent,
+        slippagePresets: c.slippagePresets,
+        highSlippagePercent: c.highSlippagePercent,
+        maxSlippagePercent: c.maxSlippagePercent,
+        packetTimeoutMinutes: c.packetTimeoutMinutes,
+        maxRouteHops: c.maxRouteHops,
+        quoteTtl: c.quoteTtl,
+        explorerTxUrls: c.explorerTxUrls,
+      ),
+      fees: shipped.fees,
+      book: shipped.book,
+      catalog: shipped.catalog,
+    );
+  }
+
+  ({ProviderContainer container, ScriptedLcd lcd}) harness({
+    required LcdAnswer answer,
+    String? rest = 'https://lcd.osmosis.test',
+    SwapData? data,
+  }) {
+    final lcd = ScriptedLcd('osmosis-1', answer);
+    final container = ProviderContainer(
+      overrides: [
+        swapDataProvider.overrideWith((_) async => data ?? shipped),
+        interchainRegistryProvider.overrideWithValue(_Registry(rest: rest)),
+        lcdFactoryProvider.overrideWithValue((_) => lcd),
+      ],
+    );
+    addTearDown(container.dispose);
+    return (container: container, lcd: lcd);
+  }
+
+  test(
+    'the release names the contract Osmosis governance lists, and nothing is compiled in',
+    () {
+      expect(shipped.config.xcsContractCandidates, [
+        'osmo1uwk8xc6q0s6t5qcpr6rht3sczu6du83xq8pwxjua0hfj5hzcnh3sqxwvxs',
+      ]);
+      // A build may add its own candidate, checked like any other.
       expect(kOsmosisXcsContract.trim(), kOsmosisXcsContract);
-    }
-  });
+    },
+  );
 
-  group('with no configured address', () {
-    test('the swap is off and the reason names the missing setting', () async {
-      if (kOsmosisXcsContract.isNotEmpty) return;
-      final container = _container(answer: (_) => throw StateError('no reads'));
-      final status = await container.read(swapVenueStatusProvider.future);
-      expect(status.ready, isFalse);
-      expect(status.venue, isNull);
-      expect(status.reason, contains('OSMOSIS_XCS_CONTRACT'));
-    });
-  });
-
-  group('with a configured address', () {
-    test('an address the chain does not know disables the swap', () async {
-      if (kOsmosisXcsContract.isEmpty) return;
-      final container = _container(
-        answer: (path) => throw InterchainError(
-          InterchainErrorCode.lcdUnreachable,
-          'not found',
-          httpStatus: 404,
-        ),
-      );
-      final status = await container.read(swapVenueStatusProvider.future);
-      expect(status.ready, isFalse);
-      expect(status.reason, contains('No contract exists'));
-    });
-
-    test('an endpoint that cannot answer disables the swap, fail closed',
-        () async {
-      if (kOsmosisXcsContract.isEmpty) return;
-      final container = _container(
-        answer: (path) => throw InterchainError(
-          InterchainErrorCode.lcdUnreachable,
-          'timeout',
-        ),
-      );
-      final status = await container.read(swapVenueStatusProvider.future);
-      expect(status.ready, isFalse);
-      expect(status.reason, contains('Could not reach'));
-    });
-
-    test('a chain with no REST endpoint disables the swap', () async {
-      if (kOsmosisXcsContract.isEmpty) return;
-      final container = _container(
-        answer: (_) => throw StateError('no reads'),
-        rest: null,
-      );
-      final status = await container.read(swapVenueStatusProvider.future);
-      expect(status.ready, isFalse);
-      expect(status.reason, contains('no REST endpoint'));
-    });
-
-    test('contract info from the chain turns the swap on', () async {
-      if (kOsmosisXcsContract.isEmpty) return;
-      final container = _container(
-        answer: (path) {
-          expect(path, contains('/cosmwasm/wasm/v1/contract/'));
-          return <String, Object?>{
-            'contract_info': {'code_id': '9', 'creator': 'osmo1creator'},
+  test(
+    'contract info from the chain turns the contract path on, with its label',
+    () async {
+      final h = harness(
+        answer: (path, _) {
+          expect(
+            path,
+            '/cosmwasm/wasm/v1/contract/${shipped.config.xcsContractCandidates.first}',
+          );
+          return {
+            'contract_info': {'code_id': '37', 'label': 'CrossChainSwaps v1.2'},
           };
         },
       );
-      final status = await container.read(swapVenueStatusProvider.future);
+      final status = await h.container.read(swapVenueStatusProvider.future);
       expect(status.ready, isTrue);
-      expect(status.checked, isTrue);
-      expect(status.venue!.contractAddress, kOsmosisXcsContract);
-    });
+      expect(
+        status.contractAddress,
+        shipped.config.xcsContractCandidates.first,
+      );
+      expect(status.label, 'CrossChainSwaps v1.2');
+      expect(status.venue?.chainId, 'osmosis-1');
+    },
+  );
 
-    test('a 200 without contract info is not proof, so the swap stays off',
-        () async {
-      if (kOsmosisXcsContract.isEmpty) return;
-      final container = _container(answer: (_) => <String, Object?>{});
-      final status = await container.read(swapVenueStatusProvider.future);
+  test(
+    'an address the chain does not know is skipped, and the next candidate is checked',
+    () async {
+      final first = shipped.config.xcsContractCandidates.first;
+      final h = harness(
+        data: withCandidates([first, second]),
+        answer: (path, _) {
+          if (path.endsWith(first)) throw notFound('osmosis-1', path);
+          return {
+            'contract_info': {'code_id': '37'},
+          };
+        },
+      );
+      final status = await h.container.read(swapVenueStatusProvider.future);
+      expect(status.ready, isTrue);
+      expect(status.contractAddress, second);
+    },
+  );
+
+  test(
+    'no candidate on chain keeps the contract path off, and says so',
+    () async {
+      final h = harness(answer: (path, _) => throw notFound('osmosis-1', path));
+      final status = await h.container.read(swapVenueStatusProvider.future);
       expect(status.ready, isFalse);
-      expect(status.reason, contains('without contract info'));
-    });
+      expect(status.venue, isNull);
+      expect(
+        status.reason,
+        contains(
+          'No crosschain-swaps contract this release names exists on Osmosis',
+        ),
+      );
+    },
+  );
+
+  test(
+    'a 200 without contract info is not proof, so the contract path stays off',
+    () async {
+      final h = harness(answer: (path, _) => {'unexpected': true});
+      final status = await h.container.read(swapVenueStatusProvider.future);
+      expect(status.ready, isFalse);
+    },
+  );
+
+  test('an endpoint that cannot answer fails closed', () async {
+    final h = harness(
+      answer: (path, _) =>
+          throw InterchainError(InterchainErrorCode.lcdUnreachable, 'timeout'),
+    );
+    final status = await h.container.read(swapVenueStatusProvider.future);
+    expect(status.ready, isFalse);
+    expect(status.reason, contains('Could not reach Osmosis'));
   });
+
+  test(
+    'live reads off: nothing is checked, and the reason says how to turn them on',
+    () async {
+      final h = harness(
+        answer: (path, _) =>
+            throw InterchainError(InterchainErrorCode.readsDisabled, 'off'),
+      );
+      final status = await h.container.read(swapVenueStatusProvider.future);
+      expect(status.ready, isFalse);
+      expect(status.reason, contains('Live reads are off'));
+    },
+  );
+
+  test('a chain with no REST endpoint cannot be checked', () async {
+    final h = harness(
+      rest: null,
+      answer: (path, _) => fail('nothing should be read'),
+    );
+    final status = await h.container.read(swapVenueStatusProvider.future);
+    expect(status.ready, isFalse);
+    expect(status.reason, contains('no REST endpoint'));
+    expect(h.lcd.calls, isEmpty);
+  });
+
+  test(
+    'a release with no candidates keeps cross-chain swaps off, pools untouched',
+    () async {
+      final h = harness(
+        data: withCandidates(const []),
+        answer: (path, _) => fail('nothing should be read'),
+      );
+      final status = await h.container.read(swapVenueStatusProvider.future);
+      if (kOsmosisXcsContract.isNotEmpty) return;
+      expect(status.ready, isFalse);
+      expect(
+        status.reason,
+        contains('Swaps of tokens already on Osmosis still work'),
+      );
+    },
+  );
 }

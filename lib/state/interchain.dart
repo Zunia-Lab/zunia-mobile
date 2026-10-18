@@ -21,6 +21,7 @@ import 'package:zunia_mobile/services/interchain/route.dart';
 import 'package:zunia_mobile/services/interchain/tracking.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/state/preferences.dart';
+import 'package:zunia_mobile/swap/swap_data.dart';
 
 /// An empty registry, for the window before the catalog asset has loaded.
 ///
@@ -188,6 +189,7 @@ final routeRegistryProvider = ChangeNotifierProvider<RouteRegistryStore>(
 ///
 /// Every `false` here carries a sentence a screen can render next to a disabled
 /// control. There is no state in which the feature is quietly unavailable.
+/// Only the contract path needs it: Osmosis's own pools swap without it.
 @immutable
 class SwapVenueStatus {
   const SwapVenueStatus._({
@@ -195,6 +197,7 @@ class SwapVenueStatus {
     required this.chainId,
     required this.contractAddress,
     required this.reason,
+    this.label,
     this.checked = false,
   });
 
@@ -209,11 +212,13 @@ class SwapVenueStatus {
   const SwapVenueStatus.ready({
     required String chainId,
     required String contractAddress,
+    String? label,
   }) : this._(
           ready: true,
           chainId: chainId,
           contractAddress: contractAddress,
           reason: null,
+          label: label,
           checked: true,
         );
 
@@ -224,6 +229,9 @@ class SwapVenueStatus {
   /// Why the swap is off. Null only when [ready].
   final String? reason;
 
+  /// The contract's on-chain label (`CrossChainSwaps v1.2`), when it has one.
+  final String? label;
+
   /// True when the address was confirmed to exist on chain this session.
   final bool checked;
 
@@ -232,28 +240,40 @@ class SwapVenueStatus {
       : null;
 }
 
-/// Check the configured crosschain-swaps contract against the chain.
+/// Check the crosschain-swaps candidates (`assets/data/interchain.json`
+/// `xcsContractCandidates`, highest confidence first) against the chain, and
+/// use the first one the chain knows.
 ///
-/// Fails closed at every step. An address that is unset, on a chain we have no
-/// endpoint for, or absent from the chain's wasm index disables the swap with
+/// Fails closed at every step. A candidate that is absent from the chain's wasm
+/// index, or a chain that cannot be reached, disables the contract path with
 /// the specific reason rather than being taken on trust: this address is the
 /// one field where a wrong value silently sends funds somewhere unrecoverable.
+/// A build may put its own candidate first with `--dart-define
+/// OSMOSIS_XCS_CONTRACT=osmo1…`; it is checked like any other.
 final swapVenueStatusProvider = FutureProvider<SwapVenueStatus>((ref) async {
-  final address = kOsmosisXcsContract.trim();
-  if (address.isEmpty) {
-    return const SwapVenueStatus.unavailable(
-      'This build has no Osmosis crosschain-swaps contract address. Swaps stay '
-      'off until OSMOSIS_XCS_CONTRACT is set: the address is deployment data, '
-      'and a wrong one would send funds to a contract that cannot return them.',
+  final data = await ref.watch(swapDataProvider.future);
+  final venueChainId = data.config.venueChainId;
+  final candidates = <String>[
+    if (kOsmosisXcsContract.trim().isNotEmpty) kOsmosisXcsContract.trim(),
+    for (final address in data.config.xcsContractCandidates)
+      if (address.trim().isNotEmpty && address.trim() != kOsmosisXcsContract.trim())
+        address.trim(),
+  ];
+  if (candidates.isEmpty) {
+    return SwapVenueStatus.unavailable(
+      'This release names no Osmosis crosschain-swaps contract, so cross-chain '
+      'swaps are off. Swaps of tokens already on Osmosis still work.',
+      chainId: venueChainId,
     );
   }
 
   final registry = ref.watch(interchainRegistryProvider);
-  final chain = registry.get(kSwapVenueChainId);
+  final chain = registry.get(venueChainId);
   if (chain == null) {
     return SwapVenueStatus.unavailable(
-      '$kSwapVenueChainId is not in the chain catalog, so the swap contract '
+      '$venueChainId is not in the chain catalog, so the swap contract '
       'cannot be checked.',
+      chainId: venueChainId,
     );
   }
   if (lcdEndpointsFromChain(chain).isEmpty) {
@@ -265,37 +285,42 @@ final swapVenueStatusProvider = FutureProvider<SwapVenueStatus>((ref) async {
   }
 
   final client = ref.watch(lcdFactoryProvider)(chain);
-  try {
-    final body = await client.getJson(
-      '/cosmwasm/wasm/v1/contract/${Uri.encodeComponent(address)}',
-      const LcdRequestOptions(cacheTtl: Duration(minutes: 10)),
-    );
-    final row = body is Map<String, Object?> ? body : null;
-    final info = row?['contract_info'];
-    if (info is! Map) {
-      return SwapVenueStatus.unavailable(
-        '${chain.chainName} answered without contract info for $address, so '
-        'the swap contract could not be confirmed.',
-        chainId: chain.chainId,
+  String? unreachable;
+  for (final address in candidates) {
+    try {
+      final body = await client.getJson(
+        '/cosmwasm/wasm/v1/contract/${Uri.encodeComponent(address)}',
+        const LcdRequestOptions(cacheTtl: Duration(minutes: 10)),
       );
+      final row = body is Map<String, Object?> ? body : null;
+      final info = row?['contract_info'];
+      if (info is! Map) continue;
+      final label = info['label'];
+      return SwapVenueStatus.ready(
+        chainId: chain.chainId,
+        contractAddress: address,
+        label: label is String && label.trim().isNotEmpty ? label.trim() : null,
+      );
+    } on InterchainError catch (error) {
+      if (error.code == InterchainErrorCode.readsDisabled) {
+        return SwapVenueStatus.unavailable(
+          'Live reads are off, so the swap contract on ${chain.chainName} has '
+          'not been checked. Turn them on in Settings to swap.',
+          chainId: chain.chainId,
+        );
+      }
+      if (error.httpStatus == 404 || error.httpStatus == 400) continue;
+      unreachable = 'Could not reach ${chain.chainName} to check the swap '
+          'contract. Cross-chain swaps stay off until it can be confirmed.';
     }
-    return SwapVenueStatus.ready(
-      chainId: chain.chainId,
-      contractAddress: address,
-    );
-  } on InterchainError catch (error) {
-    final reason = switch (error.code) {
-      InterchainErrorCode.readsDisabled =>
-        'Live reads are off, so the swap contract on ${chain.chainName} has '
-            'not been checked. Turn them on in Settings to swap.',
-      _ when error.httpStatus == 404 || error.httpStatus == 400 =>
-        'No contract exists at $address on ${chain.chainName}. Swaps stay off '
-            'rather than sending funds to an address nothing answers for.',
-      _ => 'Could not reach ${chain.chainName} to check the swap contract at '
-          '$address. Swaps stay off until it can be confirmed.',
-    };
-    return SwapVenueStatus.unavailable(reason, chainId: chain.chainId);
   }
+  return SwapVenueStatus.unavailable(
+    unreachable ??
+        'No crosschain-swaps contract this release names exists on '
+            '${chain.chainName}. Cross-chain swaps stay off rather than sending '
+            'funds to an address nothing answers for.',
+    chainId: chain.chainId,
+  );
 });
 
 /* -------------------------------------------------------------------------- *
