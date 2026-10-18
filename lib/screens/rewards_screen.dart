@@ -1,261 +1,234 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
-import 'package:zunia_mobile/crypto/amino_tx.dart';
-import 'package:zunia_mobile/services/wallet_tx_service.dart';
+import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
+import 'package:zunia_mobile/services/staking_client.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
+import 'package:zunia_mobile/state/staking.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
-import 'package:zunia_mobile/util/amounts.dart';
+import 'package:zunia_mobile/ui/facts.dart';
+import 'package:zunia_mobile/ui/tx_flow.dart';
 import 'package:zunia_mobile/widgets/chain_avatar.dart';
-import 'package:zunia_mobile/widgets/transfer_sent_sheet.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// Cross-chain claimable rewards with wallet-originated MsgWithdrawDelegationReward.
-class RewardsScreen extends ConsumerStatefulWidget {
+/// Claimable staking rewards on every enabled network. Each network is its
+/// own transaction with its own signature, so each has its own Claim.
+class RewardsScreen extends ConsumerWidget {
   const RewardsScreen({super.key});
 
-  @override
-  ConsumerState<RewardsScreen> createState() => _RewardsScreenState();
-}
-
-class _RewardsScreenState extends ConsumerState<RewardsScreen> {
-  bool _busy = false;
-
-  Future<void> _claimAll(
-    List<
-            ({
-              ChainEntry chain,
-              String chainId,
-              String name,
-              String denom,
-              int decimals,
-              String rewards
-            })>
-        rows,
+  Future<void> _claim(
+    BuildContext context,
+    WidgetRef ref,
+    ChainAccount account,
+    List<StakingPosition> rows,
   ) async {
-    final phrase = ref.read(phraseProvider);
-    final wallet = ref.read(walletProvider);
-    final active = wallet.active;
-    if (phrase == null || active == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unlock the wallet to claim.')),
-      );
-      return;
+    final chain = account.chain;
+    final batches =
+        claimMsgBatches(delegator: account.address, positions: rows);
+    if (batches.isEmpty) return;
+    final claimed = rows
+        .where((p) => (p.rewards ?? BigInt.zero) > BigInt.zero)
+        .toList()
+      ..sort((a, b) => b.rewards!.compareTo(a.rewards!));
+    final included = claimed.take(batches.first.length).toList();
+    var total = BigInt.zero;
+    for (final p in included) {
+      total += p.rewards!;
     }
-
-    setState(() => _busy = true);
-    String? lastHash;
-    try {
-      for (final row in rows) {
-        final account = ref
-            .read(chainAccountsProvider)
-            .where((a) => a.chain.chainId == row.chainId)
-            .firstOrNull;
-        if (account == null) continue;
-
-        final delegations =
-            await ref.read(delegationsProvider(row.chainId).future);
-        final claimable = delegations
-            .where((d) => (BigInt.tryParse(d.rewards) ?? BigInt.zero) > BigInt.zero)
-            .toList();
-        if (claimable.isEmpty) continue;
-
-        lastHash = await WalletTxService.instance.signAndBroadcast(
-          phrase: phrase,
-          chain: account.chain,
-          signerAddress: account.address,
-          accountIndex: active.index,
-          msgs: [
-            for (final d in claimable)
-              msgWithdrawReward(
-                delegatorAddress: account.address,
-                validatorAddress: d.validatorAddress,
-              ),
-          ],
-        );
-      }
-      if (!mounted) return;
-      if (lastHash == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No claimable rewards found on-chain.')),
-        );
-        return;
-      }
-      await showTransferSent(
-        context,
-        txHash: lastHash,
-        title: 'Rewards claimed',
-        onDone: () => Navigator.of(context).pop(),
-      );
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$err')),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    final sameDenom = chain.feeMinimalDenom.isEmpty ||
+        chain.feeMinimalDenom == chain.coinMinimalDenom;
+    await showTxReview(
+      context,
+      TxIntent(
+        title: 'Claim rewards',
+        action: 'Sign claim',
+        chain: chain,
+        signer: account.address,
+        msgs: batches.first,
+        headlineLabel: 'You claim',
+        headline: '≈ ${stakeAmount(total, chain, digits: 6)}',
+        headlineLine: included.length == 1
+            ? 'From ${included.first.moniker} · ${chain.chainName}'
+            : 'From ${included.length} validators · ${chain.chainName}',
+        facts: [
+          for (final p in included)
+            (label: p.moniker, value: stakeAmount(p.rewards!, chain, digits: 6)),
+        ],
+        notice: batches.length > 1
+            ? 'This claims from the ${batches.first.length} validators with '
+                'the most rewards. Claim again for the rest.'
+            : null,
+        gainBaseUnits: sameDenom ? total : null,
+        offerNotifications: true,
+        result: const TxResultCopy(
+          sending: 'Claiming rewards',
+          done: 'Rewards claimed',
+          failed: 'Claim failed',
+          doneMessage: 'The rewards are in your available balance.',
+        ),
+        onSettled: () {
+          refreshStaking(ref, chain.chainId);
+          ref.invalidate(balancesProvider);
+        },
+      ),
+    );
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final s = ZuniaSemanticsExt.of(context);
     final prefs = ref.watch(preferencesProvider);
     final accounts = ref.watch(chainAccountsProvider);
-    final balances = ref.watch(balancesProvider).valueOrNull ?? const {};
 
-    final rows = <({
-      ChainEntry chain,
-      String chainId,
-      String name,
-      String denom,
-      int decimals,
-      String rewards
-    })>[];
-    for (final account in accounts) {
-      final rewards = balances[account.chain.chainId]?.rewards ?? '0';
-      final parsed = BigInt.tryParse(rewards);
-      if (parsed == null || parsed == BigInt.zero) continue;
-      rows.add((
-        chain: account.chain,
-        chainId: account.chain.chainId,
-        name: account.chain.chainName,
-        denom: account.chain.coinDenom,
-        decimals: account.chain.coinDecimals,
-        rewards: rewards,
-      ));
+    final rows = <(ChainAccount, List<StakingPosition>, BigInt?)>[];
+    var loading = false;
+    var failed = 0;
+    if (prefs.liveReads) {
+      for (final account in accounts) {
+        final value = ref.watch(stakingPositionsProvider(account.chain.chainId));
+        if (value.isLoading && !value.hasValue) loading = true;
+        if (value.hasError && !value.hasValue) failed++;
+        final positions = value.valueOrNull;
+        if (positions == null) continue;
+        final total = claimableTotal(positions);
+        if (positions.any((p) => (p.rewards ?? BigInt.zero) > BigInt.zero)) {
+          rows.add((account, positions, total));
+        }
+      }
     }
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: s.screenMid,
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(
           title: 'Rewards',
-          onBack: () => Navigator.of(context).pop(),
-          trailing: Text(
-            '${rows.length} ${rows.length == 1 ? 'chain' : 'chains'}',
-            style: zuniaMono(fontSize: 11, color: s.fgDim),
-          ),
-          body: Stack(
-            children: [
-              Positioned(
-                right: -40,
-                top: 20,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 220,
-                    height: 220,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          s.accent.withValues(alpha: 0.35),
-                          s.accent.withValues(alpha: 0),
-                        ],
-                      ),
+          onBack: () => Navigator.of(context).maybePop(),
+          body: RefreshIndicator.adaptive(
+            onRefresh: () async {
+              for (final a in accounts) {
+                ref.invalidate(stakingPositionsProvider(a.chain.chainId));
+              }
+            },
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 32),
+              children: [
+                Text(
+                  'Rewards stay on each network until you claim them. Each '
+                  'network is a separate transaction and fee.',
+                  style: zuniaSans(fontSize: 13.5, height: 1.45, color: s.fgMuted),
+                ),
+                const SizedBox(height: 12),
+                if (!prefs.liveReads)
+                  const ZuniaCallout(
+                    title: 'Live reads are off',
+                    body: 'Turn live reads on in Preferences to see what you '
+                        'can claim.',
+                  )
+                else if (rows.isEmpty && loading)
+                  const ListSkeleton(rows: 3, label: 'Loading rewards')
+                else if (rows.isEmpty)
+                  ZuniaEmptyState(
+                    title: 'Nothing to claim',
+                    description: failed > 0
+                        ? '$failed network${failed == 1 ? '' : 's'} did not '
+                            'answer, so there may be rewards this list cannot '
+                            'show yet.'
+                        : 'Staking rewards show here as they accrue.',
+                  )
+                else ...[
+                  for (final (account, positions, total) in rows)
+                    _ChainRewards(
+                      chain: account.chain,
+                      total: total,
+                      validators: positions
+                          .where((p) => (p.rewards ?? BigInt.zero) > BigInt.zero)
+                          .length,
+                      hide: prefs.hideAmounts,
+                      onClaim: () => _claim(context, ref, account, positions),
                     ),
+                  if (loading)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: ListSkeleton(rows: 1, label: 'Loading more networks'),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChainRewards extends StatelessWidget {
+  const _ChainRewards({
+    required this.chain,
+    required this.total,
+    required this.validators,
+    required this.hide,
+    required this.onClaim,
+  });
+
+  final ChainEntry chain;
+  final BigInt? total;
+  final int validators;
+  final bool hide;
+  final VoidCallback onClaim;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: s.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: s.line),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              ChainAvatar(chain: chain, size: 36),
+              const SizedBox(width: 12),
+              Expanded(
+                child: MergeSemantics(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        chain.chainName,
+                        overflow: TextOverflow.ellipsis,
+                        style: zuniaSans(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: s.fg,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        hide
+                            ? '••••'
+                            : total == null
+                                ? 'from $validators validators'
+                                : '${stakeAmount(total!, chain, digits: 6)} · '
+                                    '$validators validator${validators == 1 ? '' : 's'}',
+                        style: zuniaMono(fontSize: 12, color: s.fgMuted),
+                      ),
+                    ],
                   ),
                 ),
               ),
-              ListView(
-                padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
-                children: [
-                  Text(
-                    'CLAIMABLE TOTAL',
-                    textAlign: TextAlign.center,
-                    style: zuniaMono(
-                      fontSize: 10,
-                      letterSpacing: 1.6,
-                      color: s.fgMuted,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    rows.isEmpty
-                        ? '—'
-                        : prefs.mask('${rows.length} networks'),
-                    textAlign: TextAlign.center,
-                    style: zuniaSans(
-                      fontSize: 33,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: -1.2,
-                      color: s.fg,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    rows.isEmpty
-                        ? 'Rewards stay on-chain until you sign a claim.'
-                        : 'across ${rows.length} networks · signed per chain',
-                    textAlign: TextAlign.center,
-                    style: zuniaMono(fontSize: 11, color: s.info),
-                  ),
-                  const SizedBox(height: 28),
-                  if (rows.isEmpty)
-                    const ZuniaEmptyState(
-                      title: 'Nothing to claim',
-                      description:
-                          'Delegations with outstanding rewards appear here once live reads are on.',
-                    )
-                  else
-                    for (final row in rows)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 11),
-                          child: Row(
-                            children: [
-                              ChainAvatar(chain: row.chain, size: 28),
-                              const SizedBox(width: 11),
-                              Expanded(
-                                child: Text(
-                                  row.chainId,
-                                  style: zuniaMono(
-                                    fontSize: 12,
-                                    color: s.fgMuted,
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                '${prefs.mask(formatBaseUnits(row.rewards, decimals: row.decimals))} ${row.denom}',
-                                style: zuniaMono(
-                                  fontSize: 12.5,
-                                  color: s.fg,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                  const SizedBox(height: 16),
-                  const ZuniaCallout(
-                    title: 'Signed on this device',
-                    body:
-                        'Claim builds MsgWithdrawDelegationReward amino, signs '
-                        'with the unlocked keyring, and posts to each chain REST.',
-                  ),
-                ],
-              ),
-            ],
-          ),
-          footer: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
+              const SizedBox(width: 10),
               ZuniaButton(
-                label: _busy ? 'Signing…' : 'Claim all',
-                size: ZuniaButtonSize.lg,
-                onPressed: rows.isEmpty || _busy
-                    ? null
-                    : () => _claimAll(rows),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'One broadcast per chain with claimable rewards',
-                textAlign: TextAlign.center,
-                style: zuniaMono(fontSize: 11.5, color: s.fgDim),
+                label: 'Claim',
+                size: ZuniaButtonSize.sm,
+                onPressed: onClaim,
               ),
             ],
           ),
