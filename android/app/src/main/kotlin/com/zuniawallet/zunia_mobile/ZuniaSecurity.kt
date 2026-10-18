@@ -276,8 +276,16 @@ private class BiometricVault(private val activity: FragmentActivity) {
             .setAllowedAuthenticators(BIOMETRIC_STRONG)
             .setConfirmationRequired(false)
             .build()
-        BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
-            .authenticate(info, BiometricPrompt.CryptoObject(cipher))
+        try {
+            BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
+                .authenticate(info, BiometricPrompt.CryptoObject(cipher))
+        } catch (e: IllegalStateException) {
+            // The activity is not in a state to show a fragment (backgrounded).
+            if (!answered) {
+                answered = true
+                result.error("unavailable", e.message, null)
+            }
+        }
     }
 
     private fun codeFor(errorCode: Int): String = when (errorCode) {

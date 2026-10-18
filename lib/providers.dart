@@ -47,7 +47,11 @@ final appGateProvider = FutureProvider<AppGate>((ref) async {
   // Before anything reads the vault: the old biometric unlock left the
   // password itself in secure storage, and iOS keeps a deleted app's
   // Keychain items for the next install.
-  await ks.purgeLegacyBiometricSecrets();
+  try {
+    await ks.purgeLegacyBiometricSecrets();
+  } catch (_) {
+    // Retried at the next start; it must not keep the wallet from opening.
+  }
   if (await ks.forgetIfReinstalled()) {
     await ref.read(biometricVaultProvider).delete();
   }

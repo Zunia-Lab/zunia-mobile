@@ -400,6 +400,9 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
     setState(() => _step = _Step.networks);
     await Future<void>.delayed(Duration.zero);
     await session.begin(VaultUnlock(phrases: {phraseId: phrase}));
+    // Opened from a welcome screen as a pushed route: the gate below is the
+    // wallet now, so go back to it.
+    if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   Future<void> _offerBiometrics(VaultSession session, String password) async {
