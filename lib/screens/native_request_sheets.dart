@@ -33,7 +33,6 @@ import 'package:zunia_mobile/connect/sign_in.dart';
 import 'package:zunia_mobile/connect/wallet_signer.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/pair_device.dart';
-import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/state/address_book.dart';
 import 'package:zunia_mobile/state/signing_settings.dart';

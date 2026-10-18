@@ -16,7 +16,6 @@ import 'package:zunia_mobile/security/mnemonic_security_config.dart';
 import 'package:zunia_mobile/security/password_prompt.dart';
 import 'package:zunia_mobile/security/signing_gate.dart';
 import 'package:zunia_mobile/security/vault_session.dart';
-import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/security_settings.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -121,7 +120,6 @@ class SecurityScreen extends ConsumerWidget {
     final info = account == null ? null : wallet.phraseOf(account);
     final bio = ref.watch(_biometricAvailabilityProvider).valueOrNull;
     final integrity = ref.watch(_integrityProvider).valueOrNull;
-    final prefs = ref.watch(preferencesProvider);
     final cupertino = ZuniaPlatform.isCupertino(context);
     final bioLabel = bio?.label(apple: cupertino) ?? 'biometrics';
     final bioTitle =
