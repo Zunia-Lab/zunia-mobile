@@ -22,6 +22,7 @@ import 'package:zunia_core/zunia_core.dart';
 
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
+import 'package:zunia_mobile/security/signing_gate.dart';
 import 'package:zunia_mobile/services/broadcast_service.dart';
 import 'package:zunia_mobile/tx/tx_msg.dart';
 
@@ -226,6 +227,13 @@ class TxEngine {
     required int accountIndex,
     required TxQuote quote,
   }) async {
+    // "Password on every signature": every wallet transaction passes here.
+    final summary = quote.preview.summaries.isEmpty
+        ? 'Sign on ${quote.chain.chainName}'
+        : quote.preview.summaries.join(' · ');
+    if (!await SigningGate.confirm(reason: summary)) {
+      throw const TxException('Not signed: you cancelled the confirmation.');
+    }
     final core = _kernel.core;
     final msgJson = [for (final m in quote.msgs) m.toJson()];
     // The bytes about to be signed must be the ones the user was shown.

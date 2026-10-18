@@ -5,22 +5,15 @@
 library;
 
 import 'package:flutter/widgets.dart';
+import 'package:zunia_mobile/security/signing_gate.dart';
 
-/// Returns true when signing may go ahead.
-///
-/// INTEGRATION POINT (security workstream): extension 0.1.5 can ask for the
-/// password on every signature. Once `lib/security/signing_gate.dart` lands,
-/// replace the body with its check, e.g.
-///
-/// ```dart
-/// return confirmSigning(context, reason: reason);
-/// ```
-///
-/// and nothing else needs to change: false keeps the prompt open and signs
+/// Returns true when signing may go ahead: at once unless the user turned on
+/// "Password on every signature", then after biometrics or the password
+/// (`lib/security/signing_gate.dart`). False keeps the prompt open and signs
 /// nothing.
 Future<bool> confirmDappSignature(
   BuildContext context, {
   required String reason,
-}) async {
-  return true;
+}) {
+  return SigningGate.confirm(reason: reason);
 }
