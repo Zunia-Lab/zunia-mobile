@@ -4,11 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/providers.dart';
-import 'package:zunia_mobile/screens/onboarding_screen.dart';
 import 'package:zunia_mobile/screens/root_shell.dart';
 import 'package:zunia_mobile/screens/root_warning_screen.dart';
 import 'package:zunia_mobile/screens/splash_screen.dart';
 import 'package:zunia_mobile/screens/unlock_screen.dart';
+import 'package:zunia_mobile/screens/welcome_screen.dart';
 import 'package:zunia_mobile/security/device_integrity.dart';
 import 'package:zunia_mobile/security/screen_security.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
@@ -119,7 +119,7 @@ class _AppGate extends ConsumerWidget {
       data: (g) {
         switch (g) {
           case AppGate.onboarding:
-            return const OnboardingScreen();
+            return const WelcomeScreen();
           case AppGate.unlock:
           case AppGate.ready:
             return const UnlockScreen();
