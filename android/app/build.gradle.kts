@@ -11,6 +11,9 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications uses java.time, which needs desugaring
+        // below API 26.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -48,4 +51,5 @@ dependencies {
     // BiometricPrompt with a CryptoObject for the hardware-bound biometric
     // unlock (ZuniaSecurity.kt).
     implementation("androidx.biometric:biometric:1.1.0")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

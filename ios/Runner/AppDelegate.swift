@@ -3,6 +3,7 @@ import LocalAuthentication
 import MachO
 import Security
 import UIKit
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -11,6 +12,9 @@ import UIKit
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     PrivacyCover.install()
+    // Lets flutter_local_notifications show a notice while the app is open
+    // and hear which one was tapped (FlutterAppDelegate forwards both).
+    UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 

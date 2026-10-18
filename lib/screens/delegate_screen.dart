@@ -1,27 +1,64 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
-import 'package:zunia_mobile/crypto/amino_tx.dart';
-import 'package:zunia_mobile/services/wallet_tx_service.dart';
+import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
+import 'package:zunia_mobile/services/staking_client.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
+import 'package:zunia_mobile/state/staking.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/ui/facts.dart';
+import 'package:zunia_mobile/ui/tx_flow.dart';
 import 'package:zunia_mobile/util/amounts.dart';
-import 'package:zunia_mobile/widgets/transfer_sent_sheet.dart';
+import 'package:zunia_mobile/widgets/validator_avatar.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// Delegate form for one validator.
+enum DelegateMode { stake, unstake }
+
+/// Why an amount cannot be staked or unstaked as typed; null when it can.
+String? delegateAmountProblem({
+  required AmountInput input,
+  required BigInt? pool,
+  required DelegateMode mode,
+}) {
+  switch (input.issue) {
+    case null:
+      break;
+    case AmountIssue.empty:
+      return null;
+    case AmountIssue.tooManyDecimals:
+      return 'Too many decimal places for this token';
+    case AmountIssue.notPositive:
+      return 'Enter more than zero';
+    case AmountIssue.negative:
+    case AmountIssue.notANumber:
+      return 'Enter a valid amount';
+  }
+  final units = BigInt.parse(input.baseUnits);
+  if (pool != null && units > pool) {
+    return mode == DelegateMode.stake
+        ? 'More than your available balance'
+        : 'More than you have staked here';
+  }
+  return null;
+}
+
+/// Amount entry for a stake or an unstake with one validator, then review.
 class DelegateScreen extends ConsumerStatefulWidget {
   const DelegateScreen({
     super.key,
     required this.chainId,
-    required this.moniker,
     required this.operatorAddress,
+    this.mode = DelegateMode.stake,
+    this.returnTo,
   });
 
   final String chainId;
-  final String moniker;
   final String operatorAddress;
+  final DelegateMode mode;
+
+  /// Where Done on the result page goes back to; this screen by default.
+  final ModalRoute<dynamic>? returnTo;
 
   @override
   ConsumerState<DelegateScreen> createState() => _DelegateScreenState();
@@ -29,7 +66,8 @@ class DelegateScreen extends ConsumerStatefulWidget {
 
 class _DelegateScreenState extends ConsumerState<DelegateScreen> {
   final _amount = TextEditingController();
-  double _fraction = 0;
+
+  bool get _stake => widget.mode == DelegateMode.stake;
 
   @override
   void dispose() {
@@ -37,383 +75,344 @@ class _DelegateScreenState extends ConsumerState<DelegateScreen> {
     super.dispose();
   }
 
-  void _applyFraction(double fraction, String available, int decimals) {
-    final whole = double.tryParse(
-          formatBaseUnitsExact(available, decimals: decimals),
-        ) ??
-        0;
-    _fraction = fraction;
-    _amount.text = (whole * fraction).toStringAsFixed(
-      decimals > 6 ? 6 : decimals,
-    );
+  void _fill(BigInt pool, int pct, int decimals) {
+    final units = pool * BigInt.from(pct) ~/ BigInt.from(100);
+    _amount.text = formatBaseUnitsExact(units.toString(), decimals: decimals);
+    _amount.selection = TextSelection.collapsed(offset: _amount.text.length);
+    ZuniaHaptics.selection();
     setState(() {});
+  }
+
+  Future<void> _review({
+    required ChainEntry chain,
+    required String delegator,
+    required BigInt units,
+    required String moniker,
+    required StakingValidator? validator,
+    required StakingParams? params,
+  }) async {
+    final amount = stakeAmount(units, chain, digits: chain.coinDecimals);
+    final period = params?.unbondingTime;
+    final periodText = period == null
+        ? 'the network\'s unbonding period'
+        : describeDuration(period);
+    final msgs = _stake
+        ? stakeMsgs(
+            delegator: delegator,
+            validator: widget.operatorAddress,
+            denom: chain.coinMinimalDenom,
+            amount: units,
+          )
+        : unstakeMsgs(
+            delegator: delegator,
+            validator: widget.operatorAddress,
+            denom: chain.coinMinimalDenom,
+            amount: units,
+          );
+    final done = await showTxReview(
+      context,
+      returnTo: widget.returnTo,
+      TxIntent(
+        title: _stake ? 'Review stake' : 'Review unstake',
+        action: _stake ? 'Sign stake' : 'Sign unstake',
+        chain: chain,
+        signer: delegator,
+        msgs: msgs,
+        headlineLabel: _stake ? 'You stake' : 'You unstake',
+        headline: amount,
+        headlineLine:
+            '${_stake ? 'With' : 'From'} $moniker · ${chain.chainName}',
+        facts: [
+          (label: 'Validator', value: moniker),
+          if (validator != null)
+            (label: 'Commission', value: percent(validator.commission, digits: 2)),
+          (label: 'Unbonding period', value: period == null ? 'Unknown' : describeDuration(period)),
+        ],
+        notice: _stake
+            ? 'Staked tokens can be unstaked at any time, but are then locked '
+                'for $periodText before you can spend them.'
+            : 'For $periodText these tokens earn nothing and cannot be moved '
+                'or cancelled. They return to your available balance after.',
+        offerNotifications: _stake,
+        result: _stake
+            ? const TxResultCopy(
+                sending: 'Staking',
+                done: 'Staked',
+                failed: 'Stake failed',
+                doneMessage:
+                    'Your stake is active and earns rewards from now on.',
+              )
+            : TxResultCopy(
+                sending: 'Unstaking',
+                done: 'Unstaking started',
+                failed: 'Unstake failed',
+                doneMessage: 'The tokens unbond now and are yours to spend '
+                    'after $periodText.',
+              ),
+        onSettled: () {
+          refreshStaking(ref, chain.chainId);
+          ref.invalidate(balancesProvider);
+        },
+      ),
+    );
+    if (done && mounted) _amount.clear();
   }
 
   @override
   Widget build(BuildContext context) {
     final s = ZuniaSemanticsExt.of(context);
-    final prefs = ref.watch(preferencesProvider);
-    final accounts = ref.watch(chainAccountsProvider);
-    final match = accounts.where((a) => a.chain.chainId == widget.chainId);
-    final account = match.isNotEmpty
-        ? match.first
-        : (accounts.isEmpty ? null : accounts.first);
-    if (account == null) {
+    final chain = catalogChain(widget.chainId);
+    final hide = ref.watch(preferencesProvider.select((p) => p.hideAmounts));
+    final delegator = ref
+        .watch(chainAccountsProvider)
+        .where((a) => a.chain.chainId == widget.chainId)
+        .firstOrNull
+        ?.address;
+    if (chain == null || delegator == null) {
       return Scaffold(
-        backgroundColor: Colors.transparent,
+        backgroundColor: s.screenMid,
         body: SafeArea(
-          bottom: false,
           child: ZuniaScreenScaffold(
-            title: 'Delegate',
-            onBack: () => Navigator.of(context).pop(),
+            title: _stake ? 'Stake' : 'Unstake',
+            onBack: () => Navigator.of(context).maybePop(),
             body: const ZuniaEmptyState(
-              title: 'Chain not enabled',
-              description: 'Enable this network before staking.',
+              title: 'Network not enabled',
+              description: 'Enable this network to stake on it.',
             ),
           ),
         ),
       );
     }
 
-    final chain = account.chain;
-    final available =
+    final validator = ref
+        .watch(stakingValidatorProvider(
+          (chainId: widget.chainId, operator: widget.operatorAddress),
+        ))
+        .valueOrNull;
+    final position = ref
+        .watch(stakingPositionsProvider(widget.chainId))
+        .valueOrNull
+        ?.where((p) => p.validatorAddress == widget.operatorAddress)
+        .firstOrNull;
+    final params =
+        ref.watch(stakingParamsProvider(widget.chainId)).valueOrNull;
+    final moniker =
+        validator?.moniker ?? position?.moniker ?? widget.operatorAddress;
+
+    // The pool the amount comes out of: the spendable balance for a stake,
+    // the position for an unstake. Null when it was not read: then there is
+    // no MAX and no limit, and the simulation catches an overspend.
+    BigInt? pool;
+    var reserve = BigInt.zero;
+    if (_stake) {
+      final available = BigInt.tryParse(
         ref.watch(balancesProvider).valueOrNull?[widget.chainId]?.available ??
-            '0';
-    final ready = (double.tryParse(_amount.text.trim()) ?? 0) > 0;
-    final availableLabel = prefs.mask(
-      formatBaseUnits(available, decimals: chain.coinDecimals),
+            '',
+      );
+      if (available != null) {
+        reserve = feeReserveFor(chain);
+        pool = available;
+      }
+    } else {
+      pool = position?.amount;
+    }
+    final spendable = pool == null
+        ? null
+        : _stake
+            ? maxStakeable(pool, reserve)
+            : pool;
+
+    final input = parseAmount(_amount.text, decimals: chain.coinDecimals);
+    final problem = delegateAmountProblem(
+      input: input,
+      pool: pool,
+      mode: widget.mode,
     );
-    final initials = widget.moniker.trim().isEmpty
-        ? '?'
-        : widget.moniker
-            .trim()
-            .split(RegExp(r'\s+'))
-            .take(2)
-            .map((w) => w.characters.first.toUpperCase())
-            .join();
+    final ready = input.isValid && problem == null;
+    final units = ready ? BigInt.parse(input.baseUnits) : null;
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: s.screenMid,
       body: SafeArea(
         bottom: false,
         child: ZuniaScreenScaffold(
-          title: 'Delegate',
-          onBack: () => Navigator.of(context).pop(),
+          title: _stake ? 'Stake' : 'Unstake',
+          onBack: () => Navigator.of(context).maybePop(),
           footer: ZuniaButton(
-            label: ready
-                ? 'Delegate ${_amount.text.trim()} ${chain.coinDenom}'
-                : 'Enter an amount',
+            label: ready ? 'Review' : 'Enter an amount',
             size: ZuniaButtonSize.lg,
-            onPressed: ready
-                ? () => _review(
-                      chain.coinDenom,
-                      account.address,
-                      chain.coinDecimals,
-                      chain.coinMinimalDenom,
-                    )
-                : null,
+            onPressed: !ready
+                ? null
+                : () => _review(
+                      chain: chain,
+                      delegator: delegator,
+                      units: units!,
+                      moniker: moniker,
+                      validator: validator,
+                      params: params,
+                    ),
           ),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
             children: [
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: s.surfaceRaisedGradient,
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: s.accent,
+              Row(
+                children: [
+                  CachedValidatorAvatar(
+                    chainId: chain.chainId,
+                    chainName: chain.chainName,
+                    operatorAddress: widget.operatorAddress,
+                    identity: validator?.identity ?? position?.identity ?? '',
+                    moniker: moniker,
+                    size: 40,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${_stake ? 'With' : 'From'} $moniker',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: zuniaSans(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: s.fg,
+                          ),
                         ),
-                        child: Text(
-                          initials,
-                          style: zuniaMono(
-                            fontSize: 11,
-                            color: s.accentFg,
+                        Text(
+                          validator == null
+                              ? chain.chainName
+                              : '${percent(validator.commission)} commission · '
+                                  '${chain.chainName}',
+                          style: zuniaMono(fontSize: 11.5, color: s.fgDim),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              Semantics(
+                label: 'Amount in ${chain.coinDenom}',
+                textField: true,
+                child: TextField(
+                  controller: _amount,
+                  autofocus: true,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: const [DecimalDigitFormatter()],
+                  textAlign: TextAlign.center,
+                  onChanged: (_) => setState(() {}),
+                  style: zuniaSans(
+                    fontSize: 40,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -1.6,
+                    color: s.fg,
+                    tabular: const FontFeature.tabularFigures(),
+                  ),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
+                    hintText: '0',
+                    hintStyle: zuniaSans(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w500,
+                      color: s.fgFaint,
+                    ),
+                    suffixText: chain.coinDenom,
+                    suffixStyle: zuniaMono(fontSize: 14, color: s.fgMuted),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                problem ??
+                    (spendable == null
+                        ? (_stake
+                            ? 'Available balance not read yet'
+                            : 'Staked amount not read yet')
+                        : hide
+                            ? '•••• ${_stake ? 'available' : 'staked'}'
+                            : '${stakeAmount(spendable, chain, digits: 6)} '
+                                '${_stake ? 'available' : 'staked'}'),
+                textAlign: TextAlign.center,
+                style: zuniaSans(
+                  fontSize: 13,
+                  color: problem != null ? s.dangerFg : s.fgMuted,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  for (final pct in const [25, 50, 75, 100]) ...[
+                    if (pct != 25) const SizedBox(width: 8),
+                    Expanded(
+                      child: Semantics(
+                        button: true,
+                        label: pct == 100 ? 'Maximum' : '$pct percent',
+                        child: OutlinedButton(
+                          onPressed: spendable == null ||
+                                  spendable <= BigInt.zero
+                              ? null
+                              : () => _fill(spendable, pct, chain.coinDecimals),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: s.fg,
+                            side: BorderSide(color: s.lineStrong),
+                            shape: const StadiumBorder(),
+                            minimumSize: const Size(0, 40),
+                            padding: EdgeInsets.zero,
+                          ),
+                          child: Text(
+                            pct == 100 ? 'MAX' : '$pct%',
+                            style: zuniaMono(fontSize: 12, color: s.fg),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              widget.moniker,
-                              overflow: TextOverflow.ellipsis,
-                              style: zuniaSans(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: s.fg,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              truncateAddress(widget.operatorAddress),
-                              style:
-                                  zuniaMono(fontSize: 10, color: s.fgMuted),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 28),
-              Text(
-                'DELEGATE',
-                textAlign: TextAlign.center,
-                style: zuniaMono(
-                  fontSize: 10,
-                  letterSpacing: 1.6,
-                  color: s.fgMuted,
-                ),
-              ),
-              const SizedBox(height: 14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _amount,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      inputFormatters: const [DecimalDigitFormatter()],
-                      textAlign: TextAlign.center,
-                      style: zuniaSans(
-                        fontSize: 38,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: -1.7,
-                        height: 1,
-                        color: s.fg,
-                        tabular: FontFeature.tabularFigures(),
-                      ),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        border: InputBorder.none,
-                        hintText: '0',
-                        hintStyle: zuniaSans(
-                          fontSize: 38,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: -1.7,
-                          color: s.fgDim,
-                        ),
-                      ),
-                      onChanged: (_) {
-                        final whole = double.tryParse(
-                              formatBaseUnitsExact(
-                                available,
-                                decimals: chain.coinDecimals,
-                              ),
-                            ) ??
-                            0;
-                        final entered =
-                            double.tryParse(_amount.text.trim()) ?? 0;
-                        setState(() {
-                          _fraction = whole <= 0
-                              ? 0
-                              : (entered / whole).clamp(0.0, 1.0);
-                        });
-                      },
                     ),
-                  ),
-                  Text(
-                    chain.coinDenom,
-                    style: zuniaMono(fontSize: 14, color: s.fgMuted),
-                  ),
+                  ],
                 ],
               ),
-              const SizedBox(height: 26),
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: 40,
-                  thumbShape: const RoundSliderThumbShape(
-                    enabledThumbRadius: 13,
-                  ),
-                  overlayShape: SliderComponentShape.noOverlay,
-                  activeTrackColor: s.accent,
-                  inactiveTrackColor: s.glass,
-                  thumbColor: s.fg,
-                ),
-                child: Slider(
-                  value: _fraction,
-                  onChanged: (v) =>
-                      _applyFraction(v, available, chain.coinDecimals),
-                ),
-              ),
-              Row(
-                children: [
-                  Text('0', style: zuniaMono(fontSize: 10, color: s.fgDim)),
-                  const Spacer(),
-                  Text(
-                    '$availableLabel available',
-                    style: zuniaMono(fontSize: 10, color: s.fgDim),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 26),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: s.glass,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      const ZuniaKeyValueRow(
-                        label: 'Unbonding',
-                        value: 'chain period',
-                      ),
-                      const SizedBox(height: 11),
-                      ZuniaKeyValueRow(
-                        label: 'Fee denom',
-                        value: chain.feeDenom,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              const ZuniaCallout(
-                tone: ZuniaCalloutTone.warning,
-                title: 'Unbonding period applies',
-                body:
-                    'Staked funds are locked for the chain’s unbonding window '
-                    'after undelegating.',
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _review(String denom, String from, int decimals, String minimalDenom) {
-    final s = ZuniaSemanticsExt.of(context);
-    var busy = false;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setSheet) => Container(
-          decoration: BoxDecoration(
-            gradient: s.sheetGradient,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            border: Border(top: BorderSide(color: s.line)),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+              if (_stake && reserve > BigInt.zero && pool != null) ...[
+                const SizedBox(height: 10),
                 Text(
-                  'Review delegation',
-                  style: zuniaSans(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: -0.3,
-                    color: s.fg,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                ZuniaKeyValueRow(
-                  label: 'Validator',
-                  value: widget.moniker,
-                ),
-                const SizedBox(height: 12),
-                ZuniaKeyValueRow(
-                  label: 'Amount',
-                  value: '${_amount.text.trim()} $denom',
-                ),
-                const SizedBox(height: 12),
-                ZuniaKeyValueRow(label: 'From', value: truncateAddress(from)),
-                const SizedBox(height: 18),
-                ZuniaButton(
-                  label: busy ? 'Signing…' : 'Sign and broadcast',
-                  size: ZuniaButtonSize.lg,
-                  onPressed: busy
-                      ? null
-                      : () async {
-                          final phrase = ref.read(phraseProvider);
-                          final wallet = ref.read(walletProvider);
-                          final chain =
-                              ChainCatalog.instance.find(widget.chainId);
-                          final account = wallet.active;
-                          final units =
-                              toBaseUnits(_amount.text.trim(), decimals);
-                          if (phrase == null ||
-                              chain == null ||
-                              account == null ||
-                              units == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Unlock wallet and enter amount'),
-                              ),
-                            );
-                            return;
-                          }
-                          setSheet(() => busy = true);
-                          try {
-                            final hash =
-                                await WalletTxService.instance.signAndBroadcast(
-                              phrase: phrase,
-                              chain: chain,
-                              signerAddress: from,
-                              accountIndex: account.index,
-                              msgs: [
-                                msgDelegate(
-                                  delegatorAddress: from,
-                                  validatorAddress: widget.operatorAddress,
-                                  amount: (
-                                    denom: minimalDenom,
-                                    amount: units,
-                                  ),
-                                ),
-                              ],
-                            );
-                            if (!mounted) return;
-                            if (ctx.mounted) Navigator.of(ctx).pop();
-                            await showTransferSent(
-                              context,
-                              txHash: hash,
-                              title: 'Delegation sent',
-                              onDone: () {
-                                if (mounted) Navigator.of(context).pop();
-                              },
-                            );
-                          } catch (err) {
-                            setSheet(() => busy = false);
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('$err')),
-                            );
-                          }
-                        },
-                ),
-                const SizedBox(height: 8),
-                ZuniaButton(
-                  label: 'Close',
-                  variant: ZuniaButtonVariant.secondary,
-                  size: ZuniaButtonSize.lg,
-                  onPressed: () => Navigator.of(ctx).pop(),
+                  'MAX keeps ${stakeAmount(reserve, chain, digits: 6)} for '
+                  'network fees.',
+                  textAlign: TextAlign.center,
+                  style: zuniaSans(fontSize: 12, color: s.fgDim),
                 ),
               ],
-            ),
+              const SizedBox(height: 22),
+              FactsCard(
+                children: [
+                  FactRow(
+                    label: 'Unbonding period',
+                    value: params?.unbondingTime == null
+                        ? 'Unknown'
+                        : describeDuration(params!.unbondingTime!),
+                  ),
+                  if (position != null && _stake)
+                    FactRow(
+                      label: 'Already staked here',
+                      value: hide
+                          ? '••••'
+                          : stakeAmount(position.amount, chain, digits: 6),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ZuniaCallout(
+                tone: _stake ? ZuniaCalloutTone.info : ZuniaCalloutTone.warning,
+                body: _stake
+                    ? 'Rewards start with the next block. Unstaking later '
+                        'locks the tokens for the unbonding period.'
+                    : 'Unstaked tokens stop earning at once and stay locked '
+                        'for the unbonding period. An unstake cannot be '
+                        'cancelled.',
+              ),
+            ],
           ),
         ),
       ),

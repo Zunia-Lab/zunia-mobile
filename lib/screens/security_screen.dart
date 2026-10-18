@@ -271,22 +271,6 @@ class SecurityScreen extends ConsumerWidget {
                 ],
               ),
               ZuniaListSection(
-                header: 'Privacy',
-                children: [
-                  ZuniaListTile(
-                    title: 'Anonymous diagnostics',
-                    leading: Icons.bug_report_outlined,
-                    subtitle: 'Keep local logs for troubleshooting',
-                    trailing: ZuniaAdaptiveSwitch(
-                      value: prefs.diagnostics,
-                      onChanged: (v) => ref
-                          .read(preferencesProvider.notifier)
-                          .setDiagnostics(v),
-                    ),
-                  ),
-                ],
-              ),
-              ZuniaListSection(
                 header: 'Danger zone',
                 children: [
                   ZuniaListTile(

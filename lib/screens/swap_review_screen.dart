@@ -215,7 +215,6 @@ class _SwapReviewScreenState extends ConsumerState<SwapReviewScreen> {
       setState(() => _error = 'Unlock the wallet to sign.');
       return;
     }
-    // SECURITY WORKSTREAM: confirmSigning(...) goes through this one call.
     // "Password on every signature" is asked inside TxEngine.signAndBroadcast.
     if (!mounted) return;
     setState(() {

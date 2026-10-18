@@ -334,7 +334,7 @@ class _SaveContactPromptState extends ConsumerState<_SaveContactPrompt> {
             variant: ZuniaButtonVariant.secondary,
             onPressed: () async {
               final label = _label.text.trim();
-              await ref.read(addressBookProvider.notifier).save(AddressBookEntry(
+              await ref.read(addressBookProvider.notifier).add(ContactDraft(
                     label: label.isEmpty ? truncateAddress(widget.address) : label,
                     address: widget.address,
                     chainId: widget.chainId,

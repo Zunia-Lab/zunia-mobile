@@ -6,12 +6,15 @@
 /// re-prices the quote and the review together.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/screens/send_result_screen.dart';
 import 'package:zunia_mobile/screens/send_screen.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
+import 'package:zunia_mobile/state/address_book.dart';
 import 'package:zunia_mobile/state/fee_prefs.dart';
 import 'package:zunia_mobile/state/transfer_state.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
@@ -126,6 +129,8 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
     });
     try {
       final hash = await TxEngine.instance.signAndBroadcast(phrase: phrase, accountIndex: index, quote: _quote);
+      // A saved contact remembers the send (use count, last used).
+      unawaited(ref.read(addressBookProvider.notifier).touch(_r.recipient));
       await ZuniaHaptics.success();
       PendingTransfer? record;
       final plan = _r.plan;

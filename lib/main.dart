@@ -18,6 +18,7 @@ import 'package:zunia_mobile/security/security_shell.dart';
 import 'package:zunia_mobile/security/vault_session.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
 import 'package:zunia_mobile/services/push_messaging.dart';
+import 'package:zunia_mobile/state/custom_chains.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/tokens/token_identity.dart';
 import 'package:zunia_mobile/tokens/token_registry.dart';
@@ -38,6 +39,11 @@ Future<void> main() async {
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // Chain metadata backs address derivation, so nothing can render before it.
   await ChainCatalog.load();
+  // Chains the user added by hand are part of the catalog from the first
+  // frame, or a custom chain enabled before a restart derives no address.
+  await hydrateCustomChains();
+  // The stored theme and live-reads choice, before anything renders or reads.
+  await PreferencesController.preload();
   // Token names (the hash-verified table) are read synchronously by every
   // balance row; the proven traces and explorer links can arrive a moment later.
   await TokenRegistry.load();

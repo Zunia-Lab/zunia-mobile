@@ -36,7 +36,9 @@ void main() {
         expectedPrefix: 'osmo',
         cross: false,
         ownAddress: me,
-        contacts: const [AddressBookEntry(label: 'Ada', address: friend)],
+        contacts: const [
+          AddressBookEntry(id: 'c1', label: 'Ada', address: friend, createdAt: 0, updatedAt: 0),
+        ],
       );
       expect(check.hint, 'Saved as Ada');
     });

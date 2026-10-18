@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/browser/curated_dapps.dart';
+import 'package:zunia_mobile/notifications/notifications.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
 import 'package:zunia_mobile/screens/address_book_screen.dart';
@@ -78,6 +79,39 @@ class _RootShellState extends ConsumerState<RootShell> {
   ];
 
   String _tab = 'home';
+  StreamSubscription<dynamic>? _noticeTaps;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_listenNotices);
+  }
+
+  /// The notice engine watches chains while the wallet is unlocked; a tapped
+  /// device notification, or a notice asking for a tab, lands here. Requests
+  /// from sites are ConnectInbox's.
+  void _listenNotices() {
+    if (!mounted) return;
+    _noticeTaps = ref.read(noticeEngineProvider.notifier).taps.listen((target) {
+      if (!mounted) return;
+      if (target == null) {
+        _open(const NotificationsScreen());
+      } else {
+        openNoticeTarget(context, ref, target);
+      }
+    });
+    ref.listenManual<String?>(noticeTabRequestProvider, (_, tab) {
+      if (tab == null || !mounted) return;
+      setState(() => _tab = tab);
+      ref.read(noticeTabRequestProvider.notifier).state = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    _noticeTaps?.cancel();
+    super.dispose();
+  }
   void _open(Widget screen) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
@@ -258,6 +292,7 @@ class _Drawer extends ConsumerWidget {
         wc.activeSessions.length + native.activeSessions.length;
     // The Discover list's own length, so the count follows its data file.
     final apps = ref.watch(curatedDappsProvider).valueOrNull?.dapps.length;
+    final unread = ref.watch(unreadNoticeCountProvider);
 
     return ZuniaDrawerPanel(
       children: [
@@ -413,7 +448,8 @@ class _Drawer extends ConsumerWidget {
         ZuniaDrawerRow(
           icon: Icons.notifications_none,
           label: 'Notifications',
-          badge: prefs.alerts,
+          meta: unread > 0 ? '$unread' : null,
+          badge: unread > 0,
           onTap: onNotifications,
         ),
         ZuniaDrawerRow(
@@ -427,13 +463,17 @@ class _Drawer extends ConsumerWidget {
           onTap: onHelp,
         ),
         const SizedBox(height: 18),
+        // Dark, Light and Auto, as the extension's drawer offers them; Auto
+        // used to show as Dark here, so the drawer misreported the setting.
         ZuniaSegmented<ThemeMode>(
-          value: prefs.themeMode == ThemeMode.system
-              ? ThemeMode.dark
-              : prefs.themeMode,
+          value: prefs.themeMode,
           onChanged: (mode) =>
               ref.read(preferencesProvider.notifier).setTheme(mode),
-          options: const {ThemeMode.dark: 'Dark', ThemeMode.light: 'Light'},
+          options: const {
+            ThemeMode.dark: 'Dark',
+            ThemeMode.light: 'Light',
+            ThemeMode.system: 'Auto',
+          },
         ),
       ],
     );
