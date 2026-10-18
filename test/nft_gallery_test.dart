@@ -230,9 +230,23 @@ void main() {
   testWidgets('live reads off means nothing was read, and says so',
       (tester) async {
     final lcd = _StubLcd((_, _) => const {'tokens': <String>[]});
-    await pump(tester, lcd: lcd);
+    // Off on purpose, not by default. This test was written when live reads
+    // shipped off and relied on that; the default is now on, as in the
+    // extension (`liveBalances: true`), so the switch has to be set here or the
+    // test asserts the reads-off copy on a wallet whose reads are on.
+    await pump(
+      tester,
+      lcd: lcd,
+      prefs: const {'zunia.prefs.liveReads': false},
+      userCollections: const {
+        _chainId: [_collection],
+      },
+    );
 
     expect(find.text('Nothing was read'), findsOneWidget);
+    // A saved collection is the thing reads-off must not query; without one
+    // there is nothing to ask either way and the assertion below proves
+    // nothing.
     expect(lcd.actions, isEmpty);
   });
 
