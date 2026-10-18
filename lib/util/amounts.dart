@@ -20,19 +20,6 @@ String formatCompact(num value, {int fractionDigits = 2}) {
   return '$sign${abs.toStringAsFixed(fractionDigits)}';
 }
 
-num _baseUnitsToNumber(String base, int decimals) {
-  final negative = base.startsWith('-');
-  final digits = (negative ? base.substring(1) : base).split('.').first;
-  if (digits.isEmpty || !RegExp(r'^\d+$').hasMatch(digits)) return 0;
-
-  final padded = digits.padLeft(decimals + 1, '0');
-  final whole = padded.substring(0, padded.length - decimals);
-  final fraction =
-      decimals == 0 ? '0' : padded.substring(padded.length - decimals);
-  final value = num.parse('$whole.$fraction');
-  return negative ? -value : value;
-}
-
 /// Full-precision display for amount inputs (Send %, etc.).
 String formatBaseUnitsExact(
   String base, {
@@ -60,15 +47,49 @@ String formatBaseUnitsExact(
 }
 
 /// Turns base units into a compact display string (`20.34k`, `1.50M`, …).
+///
+/// Integer arithmetic on the base units, never a double: an 18-decimal balance
+/// above 2^53 base units read back as a different number through a float. The
+/// fraction is cut, not rounded, so a row never shows more than is held
+/// (0.999 reads 0.99, not 1.00 and then fails at Max), and a non-zero amount
+/// too small for the precision reads `<0.01` rather than `0.00`.
 String formatBaseUnits(
   String base, {
   required int decimals,
   int maxFractionDigits = 2,
 }) {
-  return formatCompact(
-    _baseUnitsToNumber(base, decimals),
-    fractionDigits: maxFractionDigits,
-  );
+  final negative = base.trim().startsWith('-');
+  final digits = (negative ? base.trim().substring(1) : base.trim()).split('.').first;
+  if (digits.isEmpty || !RegExp(r'^\d+$').hasMatch(digits)) {
+    return '0${maxFractionDigits > 0 ? '.${'0' * maxFractionDigits}' : ''}';
+  }
+  final units = BigInt.parse(digits);
+  final exponent = decimals > 0 ? decimals : 0;
+  final ten = BigInt.from(10);
+  final whole = units ~/ ten.pow(exponent);
+  var shift = 0;
+  var suffix = '';
+  for (final (unit, unitExponent) in const [('Bn', 9), ('M', 6), ('k', 3)]) {
+    if (whole >= ten.pow(unitExponent)) {
+      suffix = unit;
+      shift = unitExponent;
+      break;
+    }
+  }
+  final scale = ten.pow(exponent + shift);
+  final shownWhole = units ~/ scale;
+  final raw = exponent + shift > 0
+      ? (units % scale).toString().padLeft(exponent + shift, '0')
+      : '';
+  final fraction = (raw.length > maxFractionDigits ? raw.substring(0, maxFractionDigits) : raw)
+      .padRight(maxFractionDigits, '0');
+  String body;
+  if (units > BigInt.zero && shownWhole == BigInt.zero && !fraction.contains(RegExp('[1-9]'))) {
+    body = maxFractionDigits > 0 ? '<0.${'0' * (maxFractionDigits - 1)}1' : '<1';
+  } else {
+    body = '$shownWhole${fraction.isEmpty ? '' : '.$fraction'}$suffix';
+  }
+  return negative && units > BigInt.zero ? '-$body' : body;
 }
 
 /// Optional fiat compact helper (`$20.34k`).
