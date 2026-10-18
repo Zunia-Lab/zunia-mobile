@@ -95,7 +95,7 @@ class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver
       builder: (context, child) {
         return ScreenSecurityScope(child: child ?? const SizedBox.shrink());
       },
-      home: const _AppGate(),
+      home: const SplashGate(child: _AppGate()),
     );
   }
 }
