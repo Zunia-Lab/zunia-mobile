@@ -39,6 +39,9 @@ dependencies:
   pointycastle: ^3.9.1
   flutter_inappwebview: ^6.1.5
   cryptography: ^2.9.0
+  # Device notifications for the notice feed (transfers, rewards, votes),
+  # raised by the app itself while it runs; no push server involved.
+  flutter_local_notifications: ^19.5.0
 
   # Push notifications (Firebase Cloud Messaging):
   # Uncomment when a Firebase project is linked and google-services / GoogleService-Info
