@@ -7,10 +7,19 @@
 /// An `https://.../connect?...` link carries the same query. The parser accepts
 /// exactly what `parsePairingUri` in `@zunialab/sdk-core` accepts; whether the
 /// relay is one the wallet trusts is a separate decision ([RelayPolicy]).
+///
+/// An optional `ret` names where to send the user back when the link was
+/// opened on this phone ([ReturnTarget]); an unusable `ret` is ignored and
+/// the link still pairs.
 library;
+
+import 'package:zunia_mobile/connect/app_return.dart';
 
 final _sessionId = RegExp(r'^[A-Za-z0-9_-]{22}$');
 final _token = RegExp(r'^[A-Za-z0-9_-]{43}$');
+
+/// A 22-character zunia.connect.v2 session id.
+bool isConnectSessionId(String value) => _sessionId.hasMatch(value);
 
 class PairingUri {
   const PairingUri({
@@ -18,6 +27,7 @@ class PairingUri {
     required this.joinToken,
     required this.dappPublicKey,
     required this.relay,
+    this.returnTarget,
   });
 
   final String sessionId;
@@ -30,6 +40,9 @@ class PairingUri {
 
   /// WebSocket base of the relay, for example `wss://api.zunialab.com`.
   final String relay;
+
+  /// Where to go back after answering, when the link was opened on this phone.
+  final ReturnTarget? returnTarget;
 
   Uri get relayUri => Uri.parse(relay);
 }
@@ -71,6 +84,7 @@ PairingUri? parsePairingUri(String value) {
     joinToken: joinToken,
     dappPublicKey: dappPublicKey,
     relay: relay,
+    returnTarget: ReturnTarget.parse(_first(uri, 'ret')),
   );
 }
 

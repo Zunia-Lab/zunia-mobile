@@ -74,6 +74,9 @@ class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver
     // Sockets often die while the app is in the background.
     if (state == AppLifecycleState.resumed) {
       ref.read(nativeConnectProvider).resume();
+    } else if (state == AppLifecycleState.paused) {
+      // A later answer was not prompted by the link that opened the app.
+      ref.read(nativeConnectProvider).onBackground();
     }
   }
 

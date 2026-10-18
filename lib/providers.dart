@@ -18,7 +18,10 @@ final biometricVaultProvider =
     Provider<BiometricVault>((ref) => PlatformBiometricVault());
 
 final walletConnectProvider = Provider<WalletConnectService>((ref) {
-  final service = createWalletConnectService();
+  final service = createWalletConnectService(
+    native: ref.watch(nativeConnectProvider),
+    activeAccountIndex: () => ref.read(walletProvider).active?.index ?? 0,
+  );
   ref.onDispose(() {
     unawaited(service.dispose());
   });

@@ -32,6 +32,7 @@ import 'package:zunia_mobile/connect/cosmos_signing.dart';
 import 'package:zunia_mobile/connect/sign_in.dart';
 import 'package:zunia_mobile/connect/wallet_signer.dart';
 import 'package:zunia_mobile/providers.dart';
+import 'package:zunia_mobile/screens/pair_device.dart';
 import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/state/address_book.dart';
@@ -41,34 +42,14 @@ import 'package:zunia_mobile/ui/review_widgets.dart';
 import 'package:zunia_mobile/util/amounts.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// Routes a scanned code. Zunia pairing codes start pairing, and the approval
-/// sheet opens once the site's request arrives; anything else goes to the
-/// WalletConnect sheet.
+/// Routes a scanned code: pairing codes (Zunia Connect, WalletConnect), wake
+/// links, sites and addresses. See `routeScannedCode` in pair_device.dart.
 Future<void> handleScannedCode(
   BuildContext context,
   WidgetRef ref,
   String code,
-) async {
-  if (!NativeConnectService.isPairingLink(code)) {
-    await showDappConnectSheet(context, uri: code);
-    return;
-  }
-  final messenger = ScaffoldMessenger.of(context);
-  messenger.showSnackBar(
-    const SnackBar(
-      content: Text('Contacting the site…'),
-      duration: Duration(seconds: 30),
-    ),
-  );
-  try {
-    await ref.read(nativeConnectProvider).pair(code);
-    messenger.hideCurrentSnackBar();
-  } catch (error) {
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(_messageOf(error))));
-  }
-}
+) =>
+    routeScannedCode(context, ref, code);
 
 String _messageOf(Object error) => switch (error) {
       ConnectException(:final message) => message,
@@ -1162,11 +1143,13 @@ Future<void> showNativeConnectSheet(
     extras: [
       if (description != null) ReviewNote(description),
       ?callout,
-      _VerificationCode(request.verificationCode),
+      // WalletConnect has no code to compare.
+      if (request.verificationCode.isNotEmpty) _VerificationCode(request.verificationCode),
     ],
-    rows: const [
-      ('Session', 'Zunia Connect, end-to-end encrypted'),
-      ('Expires', '24 hours after approval'),
+    rows: [
+      ('Session', request.transportLabel),
+      ('Expires', request.expiryLabel),
+      if (request.returnLabel != null) ('Then', request.returnLabel!),
     ],
   );
   return showReviewSheet(
@@ -1298,6 +1281,9 @@ Future<void> showNativeSignSheet(
     signInText: request.text,
     warnings: [..._connectWarnings(dapp), ...?review?.warnings],
     extras: [?callout],
+    rows: [
+      if (request.returnLabel != null) ('Then', request.returnLabel!),
+    ],
   );
 
   final recipients = [for (final m in review?.messages ?? const <ReviewMessage>[]) ?m.recipient];
@@ -1346,7 +1332,7 @@ class _VerificationCode extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'The site shows a code too. If the two codes differ, reject.',
+            'Check this code matches the site. If it does not, reject.',
             textAlign: TextAlign.center,
             style: zuniaSans(fontSize: 12, height: 1.45, color: s.fgMuted),
           ),

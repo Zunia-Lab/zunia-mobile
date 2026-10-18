@@ -34,7 +34,8 @@ const List<String> kUniversalLinkHosts = [
   'link.zunialab.com',
 ];
 
-const List<String> kUniversalLinkPaths = ['/wc', '/connect'];
+/// The app claims exactly these (see `connect_links.dart` for what each does).
+const List<String> kUniversalLinkPaths = ['/wc', '/connect', '/connect/wake'];
 
 /// Cosmos WalletConnect methods the wallet intends to support.
 const List<String> kCosmosWcMethods = [

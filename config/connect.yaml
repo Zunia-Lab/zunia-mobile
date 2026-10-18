@@ -24,6 +24,13 @@ native_ws:
   unpaired_ttl_seconds: 600
   paired_ttl_seconds: 86400
   deep_link: zunia://connect
+  # zunia://connect/wake?sid=<22>: brings a paired session up; carries no secret.
+  wake_link: zunia://connect/wake
+  # Optional pairing parameter ret=<url-encoded https: or app-scheme URL, <= 512 chars>:
+  # where the wallet returns after an answer, for links opened on this phone.
+  return_parameter: ret
+  request_lifetime_seconds: 300
+  max_frame_bytes: 524288
 
 # WalletConnect Cloud project: https://cloud.walletconnect.com
 walletconnect:
@@ -47,12 +54,14 @@ walletconnect:
   session:
     require_user_approval: true
     expire_on_disconnect: true
-    max_pending_requests: 5
+    # Unanswered requests get JSON-RPC error 8000 after this long.
+    request_lifetime_seconds: 300
 
 deep_links:
   # Custom scheme (always available; less secure than verified App / Universal Links)
   custom_schemes:
     - scheme: zunia
+      # Any host: WalletConnect dApps also open a bare zunia:// to return here.
       hosts:
         - wc
         - connect
@@ -66,8 +75,10 @@ deep_links:
   universal_links:
     - https://zunialab.com/wc
     - https://zunialab.com/connect
+    - https://zunialab.com/connect/wake
     - https://link.zunialab.com/wc
     - https://link.zunialab.com/connect
+    - https://link.zunialab.com/connect/wake
 
 security:
   # Only HTTPS for chain RPC / indexer / WC relay (localhost allowed in debug)

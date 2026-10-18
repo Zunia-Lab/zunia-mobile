@@ -1,7 +1,10 @@
 package com.zuniawallet.zunia_mobile
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -19,6 +22,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterFragmentActivity() {
     private val secureChannel = "com.zuniawallet.zunia_mobile/secure"
     private val hapticsChannel = "zunia/haptics"
+    private val settingsChannel = "zunia/settings"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -59,6 +63,21 @@ class MainActivity : FlutterFragmentActivity() {
                 } else {
                     view.performHapticFeedback(constant)
                     result.success(null)
+                }
+            }
+        // The scanner sends the user here when camera access was refused;
+        // url_launcher cannot open this page, it only sends VIEW intents.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, settingsChannel)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "openAppSettings") {
+                    val intent = Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", packageName, null),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    result.success(null)
+                } else {
+                    result.notImplemented()
                 }
             }
     }

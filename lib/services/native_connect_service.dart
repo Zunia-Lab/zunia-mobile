@@ -9,6 +9,10 @@
 /// - the 6-digit code, the same on both screens unless keys were swapped;
 /// - sign-in messages, which must name the verified origin, the chain and the
 ///   account the request came with.
+///
+/// The same queue also holds requests that arrived another way (WalletConnect)
+/// through [NativeConnectService.adopt], so the user answers everything one
+/// sheet at a time, oldest first.
 library;
 
 import 'dart:async';
@@ -18,7 +22,9 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:url_launcher/url_launcher.dart';
 import 'package:zunia_mobile/config/connect_config.dart';
+import 'package:zunia_mobile/connect/app_return.dart';
 import 'package:zunia_mobile/connect/connect_crypto.dart';
 import 'package:zunia_mobile/connect/cosmos_signing.dart';
 import 'package:zunia_mobile/connect/pairing_uri.dart';
@@ -30,6 +36,9 @@ typedef ConnectSocketFactory = Future<WebSocket> Function(
   List<String> protocols,
 );
 
+/// Opens a return target in the app that owns it. True when one did.
+typedef ReturnLauncher = Future<bool> Function(Uri url);
+
 Future<WebSocket> _openSocket(Uri url, List<String> protocols) {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
   return WebSocket.connect(
@@ -39,6 +48,12 @@ Future<WebSocket> _openSocket(Uri url, List<String> protocols) {
   );
 }
 
+Future<bool> _launchExternal(Uri url) =>
+    launchUrl(url, mode: LaunchMode.externalApplication);
+
+/// The relay closes a socket (code 1009) that sends a larger frame.
+const int kRelayMaxFrameBytes = 512 * 1024;
+
 final _tokenPattern = RegExp(r'^[A-Za-z0-9_-]{43}$');
 final _chainIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$');
 final _hidden = RegExp(r'[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]', unicode: true);
@@ -46,6 +61,13 @@ final _hidden = RegExp(r'[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]', unicode: true);
 const _maxArbitraryLength = 128 * 1024;
 const _maxPendingPerSession = 16;
 const _maxUnacked = 64;
+
+/// What the extension says when a prompt runs out; the SDK reads this exact
+/// wording as a timeout rather than a refusal.
+const _expiredPayload = {
+  'code': 'USER_REJECTED',
+  'message': 'Request expired before it was answered',
+};
 
 /// dart:io keeps reporting `open` after a close starts, until the peer
 /// answers, so a write can still fail.
@@ -69,6 +91,21 @@ String? _utf8OrNull(List<int> bytes) {
     return null;
   }
 }
+
+/// Length of `{"t":"msg","n":<16>,"c":<base64url(plaintext + tag)>}`.
+int _sealedFrameLength(int plaintextBytes) =>
+    41 + ((plaintextBytes + 16) * 4 + 2) ~/ 3;
+
+/// The largest signature a `result` can carry: an Ethermint key type name
+/// and a 65-byte signature, so the estimate errs on the large side.
+const _largestSignature = {
+  'pub_key': {
+    'type': 'ethermint/PubKeyEthSecp256k1____________',
+    'value': '____________________________________________',
+  },
+  'signature':
+      '____________________________________________________________________________________________',
+};
 
 /// What a site says about itself in its connect request. Unverified.
 class NativeDappMetadata {
@@ -128,7 +165,8 @@ class NativeDappIdentity {
   final NativeDappMetadata metadata;
 
   /// Origin of the page that created the session, as the relay saw it in the
-  /// `Origin` header. Null when the request carried none (not a browser).
+  /// `Origin` header (WalletConnect: as its Verify API attested it). Null when
+  /// nothing confirmed it.
   final String? verifiedOrigin;
 
   final String relay;
@@ -198,6 +236,9 @@ class NativeConnectAccount {
   int get hashCode => Object.hash(chainId, address, pubKey, algo, name);
 }
 
+/// How a request reached the wallet.
+enum ConnectTransport { zuniaConnect, walletConnect }
+
 /// Something a site asked for and the user has to decide.
 sealed class NativeRequest {
   NativeRequest({
@@ -205,12 +246,27 @@ sealed class NativeRequest {
     required this.id,
     required this.dapp,
     required this.receivedAt,
+    this.transport = ConnectTransport.zuniaConnect,
+    this.returnTarget,
   });
 
   final String sessionId;
   final String id;
   final NativeDappIdentity dapp;
   final DateTime receivedAt;
+  final ConnectTransport transport;
+
+  /// Where answering takes the user: set when the site or app opened Zunia
+  /// on this phone and named a way back.
+  final ReturnTarget? returnTarget;
+
+  String get transportLabel => switch (transport) {
+        ConnectTransport.zuniaConnect => 'Zunia Connect, end-to-end encrypted',
+        ConnectTransport.walletConnect => 'WalletConnect v2',
+      };
+
+  /// `Return to app.example.com`, for the sheet.
+  String? get returnLabel => returnTarget?.prompt;
 }
 
 final class NativeConnectRequest extends NativeRequest {
@@ -223,14 +279,26 @@ final class NativeConnectRequest extends NativeRequest {
     required this.methods,
     required this.events,
     required this.verificationCode,
+    super.transport,
+    super.returnTarget,
+    this.requiredChains = const [],
   });
 
   final List<String> chains;
   final List<String> methods;
   final List<String> events;
 
+  /// Chains the site cannot work without (WalletConnect required namespaces).
+  final List<String> requiredChains;
+
   /// Also on the site's screen; different digits mean someone is in between.
+  /// Empty for WalletConnect, which has no such code.
   final String verificationCode;
+
+  String get expiryLabel => switch (transport) {
+        ConnectTransport.zuniaConnect => '24 hours after approval',
+        ConnectTransport.walletConnect => '7 days after approval',
+      };
 }
 
 enum NativeSignKind { amino, direct, message, signIn }
@@ -245,6 +313,8 @@ final class NativeSignRequest extends NativeRequest {
     required this.chainId,
     required this.signer,
     required this.accountIndex,
+    super.transport,
+    super.returnTarget,
     this.aminoDoc,
     this.directDoc,
     this.data,
@@ -278,16 +348,30 @@ class NativeActiveSession {
     required this.accounts,
     required this.online,
     required this.expiresAt,
+    this.requestedChains = const [],
+    this.pairedAt,
+    this.sameDevice = false,
+    this.returnTarget,
   });
 
   final String sessionId;
   final NativeDappIdentity dapp;
+
+  /// Chains the site may use now.
   final List<String> chains;
+
+  /// Chains the site asked for; the user can turn any of them back on.
+  final List<String> requestedChains;
   final List<NativeConnectAccount> accounts;
 
   /// The site's side is connected to the relay right now.
   final bool online;
   final DateTime expiresAt;
+  final DateTime? pairedAt;
+
+  /// Paired from a link opened on this phone, not a scanned code.
+  final bool sameDevice;
+  final ReturnTarget? returnTarget;
 
   String get name => dapp.metadata.name;
   String get url => dapp.verifiedOrigin ?? dapp.metadata.url;
@@ -295,10 +379,36 @@ class NativeActiveSession {
 }
 
 class NativeConnectNotice {
-  const NativeConnectNotice(this.message, {this.error = false});
+  const NativeConnectNotice(this.message, {this.error = false, this.returnTarget});
 
   final String message;
   final bool error;
+
+  /// Offer a "Return" button that opens this, when the user may want to go
+  /// back to the site but did not arrive from it just now.
+  final ReturnTarget? returnTarget;
+}
+
+/// Answers a request that came another way than Zunia Connect.
+abstract interface class ForeignRequestAnswers {
+  Future<void> approveConnect(
+    NativeConnectRequest request, {
+    required List<NativeConnectAccount> accounts,
+    required int accountIndex,
+  });
+
+  Future<void> rejectConnect(NativeConnectRequest request);
+
+  Future<void> approveSign(NativeSignRequest request, Map<String, Object?> result);
+
+  Future<void> rejectSign(
+    NativeSignRequest request, {
+    required String code,
+    required String message,
+  });
+
+  /// Nobody answered within the request lifetime.
+  Future<void> expire(NativeRequest request);
 }
 
 class NativeConnectService {
@@ -308,24 +418,29 @@ class NativeConnectService {
     ConnectSocketFactory? socketFactory,
     HttpClient Function()? httpClient,
     DateTime Function()? clock,
+    ReturnLauncher? launcher,
     this.walletName = kWalletName,
     this.heartbeat = const Duration(seconds: 20),
     this.deadAfter = const Duration(seconds: 45),
     this.reconnectMin = const Duration(seconds: 1),
     this.reconnectMax = const Duration(seconds: 30),
     this.pairingTimeout = const Duration(seconds: 30),
+    this.probeTimeout = const Duration(seconds: 3),
     this.requestLifetime = const Duration(minutes: 5),
+    this.maxFrameBytes = kRelayMaxFrameBytes,
   })  : _store = store ?? MemoryConnectSessionStore(),
         _policy = relayPolicy ?? connectRelayPolicy(),
         _socket = socketFactory ?? _openSocket,
         _http = httpClient ?? HttpClient.new,
-        _now = clock ?? DateTime.now;
+        _now = clock ?? DateTime.now,
+        _launch = launcher ?? _launchExternal;
 
   final ConnectSessionStore _store;
   final RelayPolicy _policy;
   final ConnectSocketFactory _socket;
   final HttpClient Function() _http;
   final DateTime Function() _now;
+  final ReturnLauncher _launch;
   final String walletName;
   final Duration heartbeat;
   final Duration deadAfter;
@@ -333,15 +448,30 @@ class NativeConnectService {
   final Duration reconnectMax;
   final Duration pairingTimeout;
 
-  /// The SDK stops waiting for an answer after five minutes.
+  /// How long a ping on resume or wake may go unanswered before the socket
+  /// is replaced.
+  final Duration probeTimeout;
+
+  /// The SDK stops waiting for an answer after five minutes; the wallet tells
+  /// it when a request ran out rather than leaving it to guess.
   final Duration requestLifetime;
+
+  /// The relay's frame limit. Answers that would not fit are replaced by an
+  /// error before they are queued, so they never loop through reconnects.
+  final int maxFrameBytes;
 
   final Map<String, _Session> _sessions = {};
   final List<NativeRequest> _pending = [];
+  final Map<NativeRequest, ForeignRequestAnswers> _foreign = {};
+
+  /// Sessions whose link brought Zunia to the front for what waits now:
+  /// answering their last request goes straight back to the site or app.
+  final Set<String> _armed = {};
   final _changes = StreamController<void>.broadcast();
   final _notices = StreamController<NativeConnectNotice>.broadcast();
   final _random = Random();
   Future<void> _queue = Future.value();
+  Timer? _expiryTimer;
   bool _restored = false;
   bool _disposed = false;
 
@@ -351,28 +481,37 @@ class NativeConnectService {
   /// Things to tell the user: a site disconnected, pairing failed.
   Stream<NativeConnectNotice> get notices => _notices.stream;
 
-  /// Oldest first. The UI shows them one at a time.
+  /// Oldest first. The UI shows them one at a time. Requests past their
+  /// lifetime are answered as expired before the list is returned.
   List<NativeRequest> get pendingRequests {
-    final cutoff = _now().subtract(requestLifetime);
-    _pending.removeWhere(
-      (r) => r is NativeSignRequest && r.receivedAt.isBefore(cutoff),
-    );
+    _expireDue();
     return List.unmodifiable(_pending);
   }
 
   bool isPending(NativeRequest request) => _pending.contains(request);
+
+  /// Came another way than Zunia Connect ([adopt]).
+  bool isForeign(NativeRequest request) => _foreign.containsKey(request);
 
   List<NativeActiveSession> get activeSessions => [
         for (final s in _sessions.values)
           if (s.approved && !s.ended) s.view(),
       ];
 
+  NativeActiveSession? session(String sessionId) {
+    final s = _sessions[sessionId];
+    return s == null || !s.approved || s.ended ? null : s.view();
+  }
+
   static bool isPairingLink(String value) => parsePairingUri(value) != null;
 
   /// Starts pairing from a scanned or opened link. Completes once the site's
   /// connect request is waiting in [pendingRequests]. Throws
   /// [ConnectException] when the link, the relay or the site is not usable.
-  Future<NativeConnectRequest> pair(String link) async {
+  ///
+  /// [sameDevice]: the link was opened on this phone (a deep link or app
+  /// link), so its `ret` target is where answering takes the user.
+  Future<NativeConnectRequest> pair(String link, {bool sameDevice = false}) async {
     final uri = parsePairingUri(link);
     if (uri == null) {
       throw const ConnectException(
@@ -412,10 +551,13 @@ class NativeConnectService {
       keys: keys,
       joinToken: uri.joinToken,
       keyPair: keyPair,
-    );
+    )
+      ..sameDevice = sameDevice
+      ..returnTarget = uri.returnTarget;
     final request = Completer<NativeConnectRequest>();
     session.pairing = request;
     _sessions[uri.sessionId] = session;
+    if (sameDevice) _armed.add(uri.sessionId);
     try {
       await _open(session);
     } catch (_) {
@@ -433,14 +575,55 @@ class NativeConnectService {
     );
   }
 
+  /// A wake link for [sessionId] arrived: bring its socket up now so what the
+  /// site sent shows at once. Returns false, and does nothing, for a session
+  /// this phone does not have; a wake link never pairs anything.
+  bool wake(String sessionId) {
+    final s = _sessions[sessionId];
+    if (s == null || s.ended) return false;
+    if (s.sameDevice) _armed.add(sessionId);
+    _reopenNow(s);
+    _notify();
+    return true;
+  }
+
+  /// [key] is a request's [NativeRequest.sessionId] whose link brought the
+  /// app to the front (WalletConnect uses this for its own sessions).
+  void armReturn(String key) => _armed.add(key);
+
+  /// The app went to the background: a later answer was not prompted by a
+  /// link, so it should not jump to another app.
+  void onBackground() => _armed.clear();
+
   /// Shows [error] to the user, for failures the caller does not display itself.
   void reportError(Object error) {
     final message = error is ConnectException
         ? error.message
         : 'Pairing failed. Ask the site for a new code.';
-    if (!_notices.isClosed) {
-      _notices.add(NativeConnectNotice(message, error: true));
+    _notice(NativeConnectNotice(message, error: true));
+  }
+
+  /// Queues a request that arrived another way (WalletConnect), answered
+  /// through [answers] when the user decides.
+  void adopt(NativeRequest request, ForeignRequestAnswers answers) {
+    if (_disposed || _pending.contains(request)) return;
+    _pending.add(request);
+    _foreign[request] = answers;
+    _scheduleExpiry();
+    _notify();
+  }
+
+  /// Drops foreign requests the other side withdrew or that can no longer be
+  /// answered (session deleted, proposal expired).
+  void withdraw(bool Function(NativeRequest request) test) {
+    final gone = [for (final r in _pending) if (_foreign.containsKey(r) && test(r)) r];
+    if (gone.isEmpty) return;
+    for (final r in gone) {
+      _pending.remove(r);
+      _foreign.remove(r);
     }
+    _scheduleExpiry();
+    _notify();
   }
 
   Future<void> approveConnect(
@@ -448,6 +631,19 @@ class NativeConnectService {
     required List<NativeConnectAccount> accounts,
     required int accountIndex,
   }) async {
+    final foreign = _foreign[request];
+    if (foreign != null) {
+      _requirePending(request);
+      // Kept open on failure, so the user can still reject.
+      await foreign.approveConnect(
+        request,
+        accounts: accounts,
+        accountIndex: accountIndex,
+      );
+      _settle(request);
+      _afterAnswer(request);
+      return;
+    }
     final s = _live(request);
     final chains = [
       for (final chain in request.chains)
@@ -460,10 +656,13 @@ class NativeConnectService {
       );
     }
     _pending.remove(request);
+    _scheduleExpiry();
     s.approved = true;
+    s.requestedChains = List.of(request.chains);
     s.chains = chains;
     s.accounts = [for (final a in accounts) if (chains.contains(a.chainId)) a];
     s.accountIndex = accountIndex;
+    s.pairedAt = _now().millisecondsSinceEpoch;
     s.keyPair = null;
     await _reply(
       s,
@@ -477,10 +676,23 @@ class NativeConnectService {
     );
     _control(s, const {'t': 'paired'});
     _notify();
+    _afterAnswer(request);
   }
 
   Future<void> rejectConnect(NativeConnectRequest request) async {
+    final foreign = _foreign[request];
+    if (foreign != null) {
+      _settle(request);
+      try {
+        await foreign.rejectConnect(request);
+      } catch (error) {
+        developer.log('Could not reject: $error', name: 'zunia.connect');
+      }
+      _afterAnswer(request);
+      return;
+    }
     _pending.remove(request);
+    _scheduleExpiry();
     final s = _sessions[request.sessionId];
     if (s == null || s.ended) {
       _notify();
@@ -492,6 +704,7 @@ class NativeConnectService {
       id: request.id,
       payload: const {'code': 'USER_REJECTED', 'message': 'The user declined'},
     );
+    _afterAnswer(request);
     await _close(s);
   }
 
@@ -499,10 +712,20 @@ class NativeConnectService {
     NativeSignRequest request,
     Map<String, Object?> result,
   ) async {
+    final foreign = _foreign[request];
+    if (foreign != null) {
+      _requirePending(request);
+      await foreign.approveSign(request, result);
+      _settle(request);
+      _afterAnswer(request);
+      return;
+    }
     final s = _live(request);
     _pending.remove(request);
+    _scheduleExpiry();
     _notify();
     await _reply(s, 'result', id: request.id, payload: result);
+    _afterAnswer(request);
   }
 
   Future<void> rejectSign(
@@ -510,7 +733,19 @@ class NativeConnectService {
     String code = 'USER_REJECTED',
     String message = 'The user declined',
   }) async {
+    final foreign = _foreign[request];
+    if (foreign != null) {
+      _settle(request);
+      try {
+        await foreign.rejectSign(request, code: code, message: message);
+      } catch (error) {
+        developer.log('Could not reject: $error', name: 'zunia.connect');
+      }
+      _afterAnswer(request);
+      return;
+    }
     _pending.remove(request);
+    _scheduleExpiry();
     _notify();
     final s = _sessions[request.sessionId];
     if (s == null || s.ended) return;
@@ -520,6 +755,7 @@ class NativeConnectService {
       id: request.id,
       payload: {'code': code, 'message': message},
     );
+    _afterAnswer(request);
   }
 
   /// Moves every approved site to another wallet account. [accountsFor]
@@ -541,6 +777,72 @@ class NativeConnectService {
         'accounts_changed',
         payload: {
           'accounts': [for (final a in next) a.toJson()],
+        },
+      );
+    }
+    _notify();
+  }
+
+  /// Limits what a site may use to [chains], a non-empty subset of the
+  /// chains it asked for, and tells it (`chains_changed`, then
+  /// `accounts_changed` when a chain came back). [accountsFor] derives the
+  /// accounts on chains being turned back on.
+  Future<void> setSessionChains(
+    String sessionId,
+    List<String> chains, {
+    List<NativeConnectAccount> Function(List<String> chainIds)? accountsFor,
+  }) async {
+    final s = _sessions[sessionId];
+    if (s == null || !s.approved || s.ended) {
+      throw const ConnectException('NOT_CONNECTED', 'This site is no longer connected');
+    }
+    final next = [
+      for (final chain in s.requestedChains)
+        if (chains.contains(chain)) chain,
+    ];
+    if (next.isEmpty) {
+      throw const ConnectException(
+        'INVALID_PARAMS',
+        'Keep at least one chain, or disconnect the site',
+      );
+    }
+    final added = [for (final c in next) if (!s.chains.contains(c)) c];
+    var accounts = [for (final a in s.accounts) if (next.contains(a.chainId)) a];
+    if (added.isNotEmpty) {
+      final derived = accountsFor?.call(added) ?? const [];
+      final usable = {for (final a in derived) if (added.contains(a.chainId)) a.chainId};
+      next.removeWhere((c) => added.contains(c) && !usable.contains(c));
+      accounts = [
+        ...accounts,
+        for (final a in derived) if (usable.contains(a.chainId)) a,
+      ];
+    }
+    if (_sameStrings(next, s.chains)) return;
+    final reallyAdded = added.where(next.contains).isNotEmpty;
+    s.chains = next;
+    s.accounts = accounts;
+    // Requests for a chain the site lost cannot be signed any more.
+    for (final r in _pending.toList()) {
+      if (r is NativeSignRequest &&
+          r.sessionId == sessionId &&
+          !next.contains(r.chainId)) {
+        _pending.remove(r);
+        unawaited(_reply(
+          s,
+          'error',
+          id: r.id,
+          payload: {'code': 'UNKNOWN_CHAIN', 'message': '${r.chainId} is no longer part of this session'},
+        ));
+      }
+    }
+    _scheduleExpiry();
+    await _reply(s, 'chains_changed', payload: {'chains': next});
+    if (reallyAdded) {
+      await _reply(
+        s,
+        'accounts_changed',
+        payload: {
+          'accounts': [for (final a in accounts) a.toJson()],
         },
       );
     }
@@ -577,33 +879,34 @@ class NativeConnectService {
           _sessions.containsKey(s.sessionId)) {
         continue;
       }
+      // A frame the relay refused for its size would be refused again.
+      s.unacked.removeWhere((f) => f.data.length > maxFrameBytes);
       _sessions[s.sessionId] = s;
       unawaited(_reconnect(s));
     }
+    // Rewrites older rows in the current layout.
     _save();
     _notify();
   }
 
-  /// The app came back to the foreground: sockets may have died meanwhile.
+  /// The app came back to the foreground: sockets may have died meanwhile,
+  /// and requests may have run out.
   void resume() {
     for (final s in _sessions.values.toList()) {
       if (s.ended) continue;
-      if (s.socket == null) {
-        s.attempts = 0;
-        s.reconnectTimer?.cancel();
-        unawaited(_reconnect(s));
-      } else {
-        _beat(s);
-      }
+      _reopenNow(s);
     }
+    _expireDue();
   }
 
   /// Stops sockets and timers. Saved sessions stay saved.
   Future<void> dispose() async {
     _disposed = true;
+    _expiryTimer?.cancel();
     for (final s in _sessions.values) {
       s.reconnectTimer?.cancel();
       s.heartbeatTimer?.cancel();
+      s.probeTimer?.cancel();
       final socket = s.socket;
       s.socket = null;
       unawaited(s.subscription?.cancel());
@@ -625,6 +928,95 @@ class NativeConnectService {
     return s;
   }
 
+  void _requirePending(NativeRequest request) {
+    if (!_pending.contains(request)) {
+      throw const ConnectException(
+        'NOT_CONNECTED',
+        'This request is no longer open',
+      );
+    }
+  }
+
+  void _settle(NativeRequest request) {
+    _pending.remove(request);
+    _foreign.remove(request);
+    _scheduleExpiry();
+    _notify();
+  }
+
+  /// After the user answered: back to the site or app that opened Zunia for
+  /// this, once nothing else from it waits. Only when a link brought Zunia to
+  /// the front for it; otherwise the user was here already, and only hears
+  /// that they can go back.
+  void _afterAnswer(NativeRequest request) {
+    final target = request.returnTarget;
+    if (target == null || _disposed) return;
+    if (_pending.any((r) => r.sessionId == request.sessionId)) return;
+    if (_armed.remove(request.sessionId)) {
+      unawaited(_openReturn(target));
+    } else {
+      _notice(NativeConnectNotice(
+        'Done. You can go back to ${target.label}.',
+        returnTarget: target,
+      ));
+    }
+  }
+
+  Future<void> _openReturn(ReturnTarget target) async {
+    try {
+      if (await _launch(target.uri)) return;
+    } catch (error) {
+      developer.log('Could not open the return link: $error', name: 'zunia.connect');
+    }
+    _notice(NativeConnectNotice(
+      'Done. Switch back to ${target.label} to continue.',
+    ));
+  }
+
+  void _scheduleExpiry() {
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
+    if (_pending.isEmpty || _disposed) return;
+    var oldest = _pending.first.receivedAt;
+    for (final r in _pending) {
+      if (r.receivedAt.isBefore(oldest)) oldest = r.receivedAt;
+    }
+    final due = oldest.add(requestLifetime).difference(_now());
+    _expiryTimer = Timer(
+      due.isNegative ? Duration.zero : due + const Duration(milliseconds: 1),
+      _expireDue,
+    );
+  }
+
+  /// Answers every request older than [requestLifetime] as expired.
+  void _expireDue() {
+    if (_disposed) return;
+    final cutoff = _now().subtract(requestLifetime);
+    final due = [for (final r in _pending) if (!r.receivedAt.isAfter(cutoff)) r];
+    for (final request in due) {
+      _pending.remove(request);
+      final foreign = _foreign.remove(request);
+      if (foreign != null) {
+        unawaited(foreign.expire(request).catchError((Object error) {
+          developer.log('Could not expire: $error', name: 'zunia.connect');
+        }));
+        continue;
+      }
+      final s = _sessions[request.sessionId];
+      if (s == null || s.ended) continue;
+      if (request is NativeConnectRequest) {
+        unawaited(
+          _reply(s, 'connect_reject', id: request.id, payload: _expiredPayload)
+              .then((_) => _close(s)),
+        );
+      } else {
+        unawaited(_reply(s, 'error', id: request.id, payload: _expiredPayload));
+      }
+    }
+    if (due.isNotEmpty) _notify();
+    _scheduleExpiry();
+  }
+
   Future<void> _open(_Session s) async {
     if (s.ended || _disposed) return;
     final token = s.resumeToken ?? s.joinToken;
@@ -641,6 +1033,11 @@ class NativeConnectService {
       unawaited(_quietClose(socket));
       return;
     }
+    final previous = s.socket;
+    if (previous != null && !identical(previous, socket)) {
+      unawaited(s.subscription?.cancel());
+      unawaited(_quietClose(previous));
+    }
     s.socket = socket;
     s.lastFrameAt = _now();
     s.pingMark = null;
@@ -656,10 +1053,14 @@ class NativeConnectService {
   }
 
   Future<void> _reconnect(_Session s) async {
+    if (s.connecting) return;
+    s.connecting = true;
     try {
       await _open(s);
     } catch (_) {
       _scheduleReconnect(s);
+    } finally {
+      s.connecting = false;
     }
   }
 
@@ -691,6 +1092,37 @@ class NativeConnectService {
     _scheduleReconnect(s);
   }
 
+  /// Gets a live socket as soon as possible. Without one, it connects now
+  /// rather than after the backoff. With one, it pings, and reconnects at
+  /// once if nothing comes back within [probeTimeout] instead of waiting for
+  /// the dead-link timeout: iOS freezes sockets in the background without
+  /// closing them. A socket that answers is kept, so nothing the relay is
+  /// delivering on it is lost.
+  void _reopenNow(_Session s) {
+    if (s.ended || _disposed) return;
+    final socket = s.socket;
+    if (socket == null) {
+      s.reconnectTimer?.cancel();
+      s.attempts = 0;
+      unawaited(_reconnect(s));
+      return;
+    }
+    final asked = _now();
+    _write(socket, '{"t":"ping"}');
+    s.probeTimer?.cancel();
+    s.probeTimer = Timer(probeTimeout, () {
+      if (s.ended || _disposed || !identical(s.socket, socket)) return;
+      if (s.lastFrameAt.isAfter(asked)) return;
+      s.socket = null;
+      s.heartbeatTimer?.cancel();
+      unawaited(s.subscription?.cancel());
+      unawaited(_quietClose(socket));
+      s.reconnectTimer?.cancel();
+      s.attempts = 0;
+      unawaited(_reconnect(s));
+    });
+  }
+
   void _beat(_Session s) {
     final socket = s.socket;
     if (socket == null) return;
@@ -717,6 +1149,16 @@ class NativeConnectService {
         _end(s, reason: s.resumeToken == null ? 'used' : 'expired', notify: true);
       case 4000:
         _end(s, reason: 'replaced', notify: true);
+      case 1009:
+        // A frame was over the relay's limit, which is lower than this build
+        // expected. Resending it would only close the next socket the same
+        // way, so drop it, tell the site, and keep under that size from now.
+        _onFrameRefused(s);
+        if (s.resumeToken == null) {
+          _end(s, reason: 'unreachable');
+        } else {
+          _scheduleReconnect(s);
+        }
       default:
         if (s.resumeToken == null) {
           _end(s, reason: 'unreachable');
@@ -742,6 +1184,15 @@ class NativeConnectService {
         _onWelcome(s, socket, frame);
       case 'peer':
         s.online = frame['online'] == true;
+        if (s.online && s.holdForPeer) {
+          // The site is back and its queue drained into it: send what the
+          // relay refused, in order. Copies it already has are dropped by
+          // their sequence numbers.
+          s.holdForPeer = false;
+          for (final pending in s.unacked) {
+            _write(socket, pending.data);
+          }
+        }
         _notify();
       case 'msg':
         final n = frame['n'];
@@ -755,7 +1206,9 @@ class NativeConnectService {
       case 'pong':
         final mark = s.pingMark;
         if (mark != null) {
-          s.unacked.removeWhere((f) => f.index <= mark);
+          // While the relay refuses frames for an offline site, a pong says
+          // nothing about delivery: keep them for the resend.
+          if (!s.holdForPeer) s.unacked.removeWhere((f) => f.index <= mark);
           s.pingMark = null;
           if (s.approved) _save();
         }
@@ -766,10 +1219,65 @@ class NativeConnectService {
           notify: true,
         );
       case 'error':
-        developer.log(
-          'The relay refused a frame: ${frame['code']}',
-          name: 'zunia.connect',
-        );
+        if (frame['code'] == 'QUEUE_FULL') {
+          _onQueueFull(s);
+        } else {
+          developer.log(
+            'The relay refused a frame: ${frame['code']}',
+            name: 'zunia.connect',
+          );
+        }
+    }
+  }
+
+  /// The relay closed the socket over a frame's size: the largest frame it
+  /// has not confirmed is the one.
+  void _onFrameRefused(_Session s) {
+    if (s.unacked.isEmpty) return;
+    var largest = s.unacked.first;
+    for (final f in s.unacked) {
+      if (f.data.length > largest.data.length) largest = f;
+    }
+    s.unacked.remove(largest);
+    s.frameLimit = largest.data.length - 1;
+    developer.log(
+      'The relay refused a ${largest.data.length}-byte frame',
+      name: 'zunia.connect',
+    );
+    final id = largest.id;
+    if (id != null) {
+      unawaited(_reply(
+        s,
+        largest.type == 'connect_approve' ? 'connect_reject' : 'error',
+        id: id,
+        payload: _tooLarge(s.frameLimit!),
+      ));
+    }
+    _notice(NativeConnectNotice(
+      'The answer for ${s.identity.host} was too large to send. The site was '
+      'told so.',
+      error: true,
+    ));
+  }
+
+  static Map<String, Object?> _tooLarge(int limit) => {
+        'code': 'INVALID_PARAMS',
+        'message': 'The answer is larger than the relay accepts '
+            '(${limit ~/ 1024} KiB)',
+      };
+
+  /// The site is offline and the relay holds as much for it as it will: the
+  /// last answer was not queued. Keep it, and everything after it, until the
+  /// site is back.
+  void _onQueueFull(_Session s) {
+    if (s.holdForPeer) return;
+    s.holdForPeer = true;
+    if (s.approved || s.pairing != null) {
+      _notice(NativeConnectNotice(
+        '${s.identity.host} is offline. Zunia will send your answer when it is '
+        'back; keep its page open.',
+        error: true,
+      ));
     }
   }
 
@@ -794,6 +1302,7 @@ class NativeConnectService {
     final expiresAt = frame['expiresAt'];
     if (expiresAt is int) s.expiresAt = expiresAt;
     s.online = frame['peer'] == true;
+    if (s.online) s.holdForPeer = false;
     if (frame['paired'] == true) s.pairedAcknowledged = true;
     s.attempts = 0;
     s.welcomed = true;
@@ -802,8 +1311,10 @@ class NativeConnectService {
       _write(socket, jsonEncode({'t': 'hello', 'pk': bytesToBase64Url(publicKey)}));
       s.helloSent = true;
     }
-    for (final pending in s.unacked) {
-      _write(socket, pending.data);
+    if (!s.holdForPeer) {
+      for (final pending in s.unacked) {
+        _write(socket, pending.data);
+      }
     }
     if (s.approved && !s.pairedAcknowledged) _write(socket, '{"t":"paired"}');
     if (s.approved) _save();
@@ -894,8 +1405,10 @@ class NativeConnectService {
       methods: _strings(payload['methods']),
       events: _strings(payload['events']),
       verificationCode: s.keys.verificationCode,
+      returnTarget: s.sameDevice ? s.returnTarget : null,
     );
     _pending.add(request);
+    _scheduleExpiry();
     final pairing = s.pairing;
     s.pairing = null;
     if (pairing != null && !pairing.isCompleted) pairing.complete(request);
@@ -953,6 +1466,7 @@ class NativeConnectService {
           chainId: chainId,
           signer: signer,
           accountIndex: s.accountIndex,
+          returnTarget: s.sameDevice ? s.returnTarget : null,
           aminoDoc: aminoDoc,
           directDoc: directDoc,
           data: data,
@@ -972,6 +1486,7 @@ class NativeConnectService {
             'The document is for another chain than $chainId',
           );
         }
+        _checkAnswerFits(id, {'signed': doc, 'signature': _largestSignature});
         next = request(
           kind: NativeSignKind.amino,
           aminoDoc: Map<String, dynamic>.from(doc),
@@ -984,6 +1499,7 @@ class NativeConnectService {
             'The document is for another chain than $chainId',
           );
         }
+        _checkAnswerFits(id, {'signed': doc.toWire(), 'signature': _largestSignature});
         next = request(kind: NativeSignKind.direct, directDoc: doc);
       default:
         final data = _arbitraryData(payload);
@@ -1010,7 +1526,26 @@ class NativeConnectService {
         }
     }
     _pending.add(next);
+    _scheduleExpiry();
     _notify();
+  }
+
+  /// Refuses, before the user is asked, a document whose signed answer
+  /// (which carries the document back) would be over the relay's frame limit.
+  void _checkAnswerFits(String id, Map<String, Object?> result) {
+    final plaintext = utf8.encode(jsonEncode({
+      'seq': 9007199254740991,
+      'type': 'result',
+      'id': id,
+      'payload': result,
+    }));
+    if (_sealedFrameLength(plaintext.length) > maxFrameBytes) {
+      throw ConnectException(
+        'INVALID_PARAMS',
+        'This document is too large to sign over Zunia Connect: the signed '
+            'answer would be over the relay limit of ${maxFrameBytes ~/ 1024} KiB',
+      );
+    }
   }
 
   Uint8List _arbitraryData(Map<String, dynamic> payload) {
@@ -1035,6 +1570,9 @@ class NativeConnectService {
 
   /// Seals and sends in order. For an approved session the new sequence
   /// number is saved before the frame leaves, so a restart never reuses one.
+  /// An answer too large for the relay is replaced by an error saying so: the
+  /// relay would close the socket on it, and the resend after every
+  /// reconnect would close the next one too.
   Future<void> _reply(
     _Session s,
     String type, {
@@ -1043,13 +1581,33 @@ class NativeConnectService {
   }) =>
       _serial(() async {
         if (s.ended) return;
-        final frame = s.cipher.seal(type, id: id, payload: payload);
-        final data = jsonEncode({'t': 'msg', 'n': frame.n, 'c': frame.c});
-        s.unacked.add(_Outgoing(++s.sentCount, data));
+        final limit = min(maxFrameBytes, s.frameLimit ?? maxFrameBytes);
+        var sentType = type;
+        var data = _sealed(s, type, id: id, payload: payload);
+        if (data.length > limit) {
+          developer.log(
+            'An answer of ${data.length} bytes is over the relay limit',
+            name: 'zunia.connect',
+          );
+          if (id == null) return;
+          sentType = type == 'connect_approve' ? 'connect_reject' : 'error';
+          data = _sealed(s, sentType, id: id, payload: _tooLarge(limit));
+          _notice(NativeConnectNotice(
+            'The answer for ${s.identity.host} was too large to send. The site '
+            'was told so.',
+            error: true,
+          ));
+        }
+        s.unacked.add(_Outgoing(++s.sentCount, data, type: sentType, id: id));
         if (s.unacked.length > _maxUnacked) s.unacked.removeAt(0);
         if (s.approved) await _persist();
-        _write(s.socket, data);
+        if (!s.holdForPeer) _write(s.socket, data);
       });
+
+  String _sealed(_Session s, String type, {String? id, Object? payload}) {
+    final frame = s.cipher.seal(type, id: id, payload: payload);
+    return jsonEncode({'t': 'msg', 'n': frame.n, 'c': frame.c});
+  }
 
   void _control(_Session s, Map<String, Object?> frame) {
     _write(s.socket, jsonEncode(frame));
@@ -1085,12 +1643,15 @@ class NativeConnectService {
     s.ended = true;
     s.reconnectTimer?.cancel();
     s.heartbeatTimer?.cancel();
+    s.probeTimer?.cancel();
     final socket = s.socket;
     s.socket = null;
     unawaited(s.subscription?.cancel());
     if (socket != null) unawaited(_quietClose(socket));
     _sessions.remove(s.sessionId);
-    _pending.removeWhere((r) => r.sessionId == s.sessionId);
+    _armed.remove(s.sessionId);
+    _pending.removeWhere((r) => r.sessionId == s.sessionId && !_foreign.containsKey(r));
+    _scheduleExpiry();
     final pairing = s.pairing;
     s.pairing = null;
     if (pairing != null && !pairing.isCompleted) {
@@ -1098,8 +1659,8 @@ class NativeConnectService {
     }
     if (s.approved) {
       _save();
-      if (notify && !_notices.isClosed) {
-        _notices.add(NativeConnectNotice(_endMessage(s.identity.host, reason)));
+      if (notify) {
+        _notice(NativeConnectNotice(_endMessage(s.identity.host, reason)));
       }
     }
     _notify();
@@ -1161,6 +1722,10 @@ class NativeConnectService {
     if (!_changes.isClosed) _changes.add(null);
   }
 
+  void _notice(NativeConnectNotice notice) {
+    if (!_notices.isClosed) _notices.add(notice);
+  }
+
   static bool _sameAccounts(
     List<NativeConnectAccount> a,
     List<NativeConnectAccount> b,
@@ -1171,13 +1736,25 @@ class NativeConnectService {
     }
     return true;
   }
+
+  static bool _sameStrings(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 }
 
 class _Outgoing {
-  const _Outgoing(this.index, this.data);
+  const _Outgoing(this.index, this.data, {this.type, this.id});
 
   final int index;
   final String data;
+
+  /// What the frame answers, while the app runs (not saved).
+  final String? type;
+  final String? id;
 }
 
 class _Session {
@@ -1208,16 +1785,28 @@ class _Session {
   ConnectKeyPair? keyPair;
   String? verifiedOrigin;
   int expiresAt = 0;
+  int? pairedAt;
   NativeDappMetadata metadata = NativeDappMetadata.unknown;
+  List<String> requestedChains = const [];
   List<String> chains = const [];
   List<NativeConnectAccount> accounts = const [];
   int accountIndex = 0;
+  bool sameDevice = false;
+  ReturnTarget? returnTarget;
   bool approved = false;
   bool pairedAcknowledged = false;
   bool helloSent = false;
   bool welcomed = false;
   bool online = false;
   bool ended = false;
+  bool connecting = false;
+
+  /// The relay refused a frame because the site is offline and its queue is
+  /// full: hold everything until the site is back.
+  bool holdForPeer = false;
+
+  /// Learned from a relay that closed a socket over a frame's size.
+  int? frameLimit;
   String? connectRequestId;
   Completer<NativeConnectRequest>? pairing;
 
@@ -1225,6 +1814,7 @@ class _Session {
   StreamSubscription<dynamic>? subscription;
   Timer? heartbeatTimer;
   Timer? reconnectTimer;
+  Timer? probeTimer;
   DateTime lastFrameAt = DateTime.fromMillisecondsSinceEpoch(0);
   int attempts = 0;
 
@@ -1243,34 +1833,45 @@ class _Session {
         sessionId: sessionId,
         dapp: identity,
         chains: List.unmodifiable(chains),
+        requestedChains: List.unmodifiable(
+          requestedChains.isEmpty ? chains : requestedChains,
+        ),
         accounts: List.unmodifiable(accounts),
         online: online,
         expiresAt: DateTime.fromMillisecondsSinceEpoch(expiresAt),
+        pairedAt: pairedAt == null ? null : DateTime.fromMillisecondsSinceEpoch(pairedAt!),
+        sameDevice: sameDevice,
+        returnTarget: returnTarget,
       );
 
   Map<String, dynamic> toJson() => {
-        'v': 1,
+        'v': kConnectSessionSchema,
         'sessionId': sessionId,
         'relay': relay,
         'resumeToken': resumeToken,
         'verifiedOrigin': verifiedOrigin,
         'expiresAt': expiresAt,
+        'pairedAt': pairedAt,
         'dappToWallet': bytesToBase64Url(keys.dappToWallet),
         'walletToDapp': bytesToBase64Url(keys.walletToDapp),
         'verificationCode': keys.verificationCode,
         'sendSeq': cipher.sendSeq,
         'receiveSeq': cipher.receiveSeq,
         'metadata': metadata.toJson(),
+        'requestedChains': requestedChains,
         'chains': chains,
         'accounts': [for (final a in accounts) a.toJson()],
         'accountIndex': accountIndex,
         'paired': pairedAcknowledged,
+        'sameDevice': sameDevice,
+        'returnUrl': returnTarget?.url,
         'unacked': [for (final f in unacked.take(16)) f.data],
       };
 
-  static _Session? fromJson(Map<String, dynamic> json) {
+  static _Session? fromJson(Map<String, dynamic> raw) {
+    final json = upgradeConnectSessionRow(raw);
+    if (json == null) return null;
     try {
-      if (json['v'] != 1) return null;
       final session = _Session(
         sessionId: json['sessionId'] as String,
         relay: json['relay'] as String,
@@ -1285,14 +1886,18 @@ class _Session {
       )
         ..verifiedOrigin = json['verifiedOrigin'] as String?
         ..expiresAt = json['expiresAt'] as int
+        ..pairedAt = json['pairedAt'] as int?
         ..metadata = NativeDappMetadata.fromWire(json['metadata'])
         ..chains = _strings(json['chains'])
+        ..requestedChains = _strings(json['requestedChains'])
         ..accounts = [
           for (final a in json['accounts'] as List)
             NativeConnectAccount.fromJson(Map<String, dynamic>.from(a as Map)),
         ]
         ..accountIndex = json['accountIndex'] as int
         ..pairedAcknowledged = json['paired'] == true
+        ..sameDevice = json['sameDevice'] == true
+        ..returnTarget = ReturnTarget.parse(json['returnUrl'] as String?)
         ..approved = true
         ..helloSent = true;
       for (final data in _strings(json['unacked'])) {
