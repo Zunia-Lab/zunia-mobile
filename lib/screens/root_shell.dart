@@ -84,7 +84,7 @@ class _RootShellState extends ConsumerState<RootShell> {
 
   String _tab = 'home';
   final _subs = <StreamSubscription<dynamic>>[];
-  ProviderSubscription<int?>? _accountSub;
+  ProviderSubscription<String?>? _accountSub;
   bool _sheetOpen = false;
 
   @override
@@ -103,8 +103,10 @@ class _RootShellState extends ConsumerState<RootShell> {
     _subs.add(native.notices.listen(_onNativeNotice));
     _subs.add(wc.sessionProposals.listen(_onWcProposal));
     _subs.add(deep.links.listen(_onDeepLink));
-    _accountSub = ref.listenManual<int?>(
-      walletProvider.select((w) => w.active?.index),
+    // By id, not derivation index: accounts with their own phrase all
+    // derive at index 0, and switching between them must still re-announce.
+    _accountSub = ref.listenManual<String?>(
+      walletProvider.select((w) => w.active?.id),
       _onAccountChanged,
     );
     // Requests that arrived while the wallet was locked.
@@ -151,17 +153,20 @@ class _RootShellState extends ConsumerState<RootShell> {
     unawaited(_showNextNativeRequest());
   }
 
-  void _onAccountChanged(int? previous, int? next) {
+  void _onAccountChanged(String? previous, String? next) {
     if (next == null || previous == null || previous == next) return;
+    // The phrase is swapped before the account (WalletController._persist).
     final phrase = ref.read(phraseProvider);
     if (phrase == null) return;
-    final name = ref.read(walletProvider).active?.name;
+    final active = ref.read(walletProvider).active;
+    final index = active?.index ?? 0;
+    final name = active?.name;
     unawaited(
       ref.read(nativeConnectProvider).switchAccount(
-            accountIndex: next,
+            accountIndex: index,
             accountsFor: (chainIds) => connectAccountsFor(
               phrase: phrase,
-              accountIndex: next,
+              accountIndex: index,
               chainIds: chainIds,
               accountName: name,
             ),

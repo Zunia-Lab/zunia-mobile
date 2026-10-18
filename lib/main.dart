@@ -9,8 +9,10 @@ import 'package:zunia_mobile/screens/root_shell.dart';
 import 'package:zunia_mobile/screens/root_warning_screen.dart';
 import 'package:zunia_mobile/screens/splash_screen.dart';
 import 'package:zunia_mobile/screens/unlock_screen.dart';
+import 'package:zunia_mobile/security/app_restart.dart';
 import 'package:zunia_mobile/security/device_integrity.dart';
-import 'package:zunia_mobile/security/screen_security.dart';
+import 'package:zunia_mobile/security/security_shell.dart';
+import 'package:zunia_mobile/security/vault_session.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
 import 'package:zunia_mobile/services/push_messaging.dart';
 import 'package:zunia_mobile/state/preferences.dart';
@@ -31,7 +33,12 @@ Future<void> main() async {
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // Chain metadata backs address derivation, so nothing can render before it.
   await ChainCatalog.load();
-  runApp(const ProviderScope(child: ZuniaApp()));
+  // AppRestart: removing the wallet starts the app over with fresh providers.
+  runApp(
+    AppRestart(
+      builder: (key) => ProviderScope(key: key, child: const ZuniaApp()),
+    ),
+  );
 }
 
 class ZuniaApp extends ConsumerStatefulWidget {
@@ -42,7 +49,7 @@ class ZuniaApp extends ConsumerStatefulWidget {
 }
 
 class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver {
-  final _navKey = GlobalKey<NavigatorState>();
+  late final _navKey = ref.read(appNavigatorKeyProvider);
   DeepLinkHandler? _deepLinks;
 
   @override
@@ -92,8 +99,9 @@ class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver
       theme: ZuniaTheme.light(),
       darkTheme: ZuniaTheme.dark(),
       themeMode: themeMode,
+      // Auto-lock, the lock screen over the app, the app-switcher cover.
       builder: (context, child) {
-        return ScreenSecurityScope(child: child ?? const SizedBox.shrink());
+        return SecurityShell(child: child ?? const SizedBox.shrink());
       },
       home: const _AppGate(),
     );
@@ -110,7 +118,9 @@ class _AppGate extends ConsumerWidget {
       return KernelMissingScreen(reason: WalletKernel.instance.loadError);
     }
     final session = ref.watch(sessionProvider);
-    if (session != null) {
+    // Once unlocked, a lock covers the shell (SecurityShell) instead of
+    // replacing it, so whatever was open is still there after unlocking.
+    if (session != null || ref.watch(hasUnlockedProvider)) {
       return const RootShell();
     }
 

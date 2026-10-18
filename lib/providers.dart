@@ -2,12 +2,20 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/crypto/keystore.dart';
+import 'package:zunia_mobile/security/biometric_vault.dart';
 import 'package:zunia_mobile/services/connect_session_store.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/wallet_connect_service.dart';
+import 'package:zunia_mobile/state/wallet_state.dart';
+
+// The session lives with the account index it belongs to.
+export 'package:zunia_mobile/state/wallet_state.dart' show sessionProvider;
 
 final keystoreProvider = Provider<Keystore>((ref) => Keystore());
+
+final biometricVaultProvider =
+    Provider<BiometricVault>((ref) => PlatformBiometricVault());
 
 final walletConnectProvider = Provider<WalletConnectService>((ref) {
   final service = createWalletConnectService();
@@ -36,14 +44,23 @@ enum AppGate { loading, onboarding, unlock, ready }
 
 final appGateProvider = FutureProvider<AppGate>((ref) async {
   final ks = ref.watch(keystoreProvider);
+  // Before anything reads the vault: the old biometric unlock left the
+  // password itself in secure storage, and iOS keeps a deleted app's
+  // Keychain items for the next install.
+  await ks.purgeLegacyBiometricSecrets();
+  if (await ks.forgetIfReinstalled()) {
+    await ref.read(biometricVaultProvider).delete();
+  }
   final has = await ks.hasVault;
   if (!has) return AppGate.onboarding;
   return AppGate.unlock;
 });
 
-/// Session after unlock; null when locked.
-final sessionProvider = StateProvider<UnlockedVault?>((ref) => null);
-
+/// Whether the active account's recovery phrase was verified (the user
+/// picked the right words). A restored phrase starts unverified.
 final backupVerifiedProvider = FutureProvider<bool>((ref) async {
-  return ref.watch(keystoreProvider).isBackupVerified;
+  final wallet = ref.watch(walletProvider);
+  final account = wallet.active;
+  if (account == null) return false;
+  return wallet.phraseOf(account)?.backupVerified ?? false;
 });

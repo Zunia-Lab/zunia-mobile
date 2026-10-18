@@ -19,7 +19,6 @@ dependencies:
     path: ../zunia-core/packages/dart
 
   flutter_secure_storage: ^9.2.4
-  local_auth: ^2.3.0
   mobile_scanner: ^7.0.0
   flutter_riverpod: ^2.6.1
   shared_preferences: ^2.5.3

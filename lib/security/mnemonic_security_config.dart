@@ -6,7 +6,8 @@ class MnemonicSecurityConfig {
 
   static const int schemaVersion = 1;
 
-  // screenshots
+  // screenshots: FLAG_SECURE on the phrase and unlock screens, not app-wide,
+  // so a receive QR can still be screenshotted (see SensitiveScreen).
   static const bool androidFlagSecure = true;
   static const bool iosDetectScreenCapture = true;
   static const bool iosBlurOnScreenshotNotification = true;
@@ -20,7 +21,8 @@ class MnemonicSecurityConfig {
 
   // clipboard
   static const bool allowMnemonicCopyDefault = true;
-  static const int clipboardAutoClearSeconds = 45;
+  /// Same as the extension (`SENSITIVE_CLIPBOARD_MS`).
+  static const int clipboardAutoClearSeconds = 30;
   static const bool warnBeforeCopy = false;
 
   // input
