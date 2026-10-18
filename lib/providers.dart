@@ -6,11 +6,15 @@ import 'package:zunia_mobile/services/connect_session_store.dart';
 import 'package:zunia_mobile/services/deep_link_handler.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/wallet_connect_service.dart';
+import 'package:zunia_mobile/state/wallet_state.dart';
 
 final keystoreProvider = Provider<Keystore>((ref) => Keystore());
 
 final walletConnectProvider = Provider<WalletConnectService>((ref) {
-  final service = createWalletConnectService();
+  final service = createWalletConnectService(
+    native: ref.watch(nativeConnectProvider),
+    activeAccountIndex: () => ref.read(walletProvider).active?.index ?? 0,
+  );
   ref.onDispose(() {
     unawaited(service.dispose());
   });
