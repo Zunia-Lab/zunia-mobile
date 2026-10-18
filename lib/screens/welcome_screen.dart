@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/onboarding_screen.dart';
-import 'package:zunia_mobile/security/seed_safety_copy.dart';
 import 'package:zunia_mobile/ui/zunia_mark.dart';
 import 'package:zunia_tokens/zunia_tokens.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -74,7 +73,6 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen>
   late final AnimationController _ambient =
       AnimationController(vsync: this, duration: const Duration(seconds: 30));
 
-  bool _acksAccepted = false;
   bool _opening = false;
 
   @override
@@ -102,21 +100,10 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen>
     if (_opening) return;
     _opening = true;
     try {
-      if (_acksAccepted) {
-        ZuniaHaptics.light();
-        await Navigator.of(context).push(_onboardingRoute(mode));
-      } else {
-        // The sheet hands over to the flow itself (the page covers it) rather
-        // than closing first, so the two never animate against each other.
-        await showZuniaSheet<void>(
-          context,
-          title: SeedSafetyCopy.title,
-          builder: (_) => _SafetySheet(
-            onAccepted: () => _acksAccepted = true,
-            next: () => _onboardingRoute(mode),
-          ),
-        );
-      }
+      // The flow asks the recovery-phrase acknowledgements itself, next to
+      // the phrase they are about.
+      ZuniaHaptics.light();
+      await Navigator.of(context).push(_onboardingRoute(mode));
     } finally {
       _opening = false;
     }
@@ -830,118 +817,4 @@ class _StagePainter extends CustomPainter {
       old.l.size != l.size ||
       old.l.still != l.still ||
       old.s != s;
-}
-
-// --- Safety acknowledgements ------------------------------------------------------
-
-class _SafetySheet extends StatefulWidget {
-  const _SafetySheet({required this.onAccepted, required this.next});
-
-  final VoidCallback onAccepted;
-
-  /// The flow to open in place of the sheet.
-  final Route<void> Function() next;
-
-  @override
-  State<_SafetySheet> createState() => _SafetySheetState();
-}
-
-class _SafetySheetState extends State<_SafetySheet> {
-  bool _understand = false;
-  bool _backup = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
-    return SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            SeedSafetyCopy.summary,
-            style: zuniaSans(fontSize: 14, height: 1.5, color: s.fgMuted),
-          ),
-          const SizedBox(height: 16),
-          _AckRow(
-            value: _understand,
-            label: SeedSafetyCopy.ackUnderstand,
-            onChanged: (v) => setState(() => _understand = v),
-          ),
-          const SizedBox(height: 10),
-          _AckRow(
-            value: _backup,
-            label: SeedSafetyCopy.ackBackup,
-            onChanged: (v) => setState(() => _backup = v),
-          ),
-          const SizedBox(height: 20),
-          ZuniaButton(
-            label: 'Continue',
-            size: ZuniaButtonSize.lg,
-            onPressed: _understand && _backup
-                ? () {
-                    widget.onAccepted();
-                    Navigator.of(context).pushReplacement(widget.next());
-                  }
-                : null,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AckRow extends StatelessWidget {
-  const _AckRow({required this.value, required this.label, required this.onChanged});
-
-  final bool value;
-  final String label;
-  final ValueChanged<bool> onChanged;
-
-  void _set(bool next) {
-    ZuniaHaptics.selection();
-    onChanged(next);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
-    final box = ZuniaPlatform.isCupertino(context)
-        ? CupertinoCheckbox(
-            value: value,
-            activeColor: s.accent,
-            onChanged: (v) => _set(v ?? false),
-          )
-        : Checkbox(value: value, onChanged: (v) => _set(v ?? false));
-    return MergeSemantics(
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          onTap: () => _set(!value),
-          borderRadius: BorderRadius.circular(ZuniaRadii.lg),
-          child: Ink(
-            padding: const EdgeInsets.fromLTRB(8, 10, 14, 10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(ZuniaRadii.lg),
-              border: Border.all(color: value ? s.accent : s.line),
-              color: s.glass,
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(width: 32, height: 24, child: Center(child: box)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: zuniaSans(fontSize: 13.5, height: 1.45, color: s.fg),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

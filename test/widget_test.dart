@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zunia_mobile/main.dart';
@@ -10,6 +11,8 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    // The vault lives in secure storage; an empty one is a fresh install.
+    FlutterSecureStorage.setMockInitialValues({});
   });
 
   testWidgets('a fresh install opens on the splash, then the welcome screen', (tester) async {

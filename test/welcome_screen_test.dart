@@ -32,15 +32,6 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 700));
 }
 
-Future<void> _acceptSafetyAcks(WidgetTester tester) async {
-  expect(find.text(SeedSafetyCopy.title), findsOneWidget);
-  await tester.tap(find.text(SeedSafetyCopy.ackUnderstand));
-  await tester.pump();
-  await tester.tap(find.text(SeedSafetyCopy.ackBackup));
-  await tester.pump();
-  await tester.tap(find.text('Continue'));
-  await _settle(tester);
-}
 
 void main() {
   setUpAll(loadBrandFonts);
@@ -73,8 +64,8 @@ void main() {
 
         await tester.tap(find.text('I already have a wallet'));
         await _settle(tester);
-        expect(find.text(SeedSafetyCopy.ackBackup), findsOneWidget);
-        expect(tester.takeException(), isNull, reason: 'safety sheet, $mode');
+        expect(find.byType(OnboardingScreen), findsOneWidget);
+        expect(tester.takeException(), isNull, reason: 'restore flow, $mode');
 
         // Unmount between themes so each run starts on page one.
         await tester.pumpWidget(const SizedBox());
@@ -112,40 +103,26 @@ void main() {
   }, variant: _platforms);
 
   testWidgets(
-    'create asks the safety acknowledgements once, then opens onboarding in create mode',
+    'create opens onboarding in create mode, and Back returns to the welcome screen',
     (tester) async {
       await tester.pumpWidget(_app());
       await _settle(tester);
 
       await tester.tap(find.text('Create a new wallet'));
       await _settle(tester);
-      // Continue stays off until both are ticked.
-      await tester.tap(find.text('Continue'));
-      await _settle(tester);
-      expect(find.byType(OnboardingScreen), findsNothing);
 
-      await _acceptSafetyAcks(tester);
       final onboarding = tester.widget<OnboardingScreen>(find.byType(OnboardingScreen));
       expect(onboarding.initialMode, OnboardingMode.create);
-      // Straight into the flow: its own welcome step, and the acknowledgements
-      // just given, are not shown again.
-      expect(find.text(SeedSafetyCopy.ackUnderstand), findsNothing);
+      // Straight into the flow: onboarding's own welcome step is not shown.
       expect(find.text('Create a new wallet'), findsNothing);
+      // The flow asks the acknowledgements beside the phrase they are about.
+      expect(find.text(SeedSafetyCopy.ackUnderstand), findsOneWidget);
 
-      // Back from the first step returns to the welcome screen...
-      await tester.tap(find.text('Back'));
+      // The system back (gesture or button) leaves the flow's first step.
+      await tester.binding.handlePopRoute();
       await _settle(tester);
       expect(find.byType(OnboardingScreen), findsNothing);
       expect(find.byType(WelcomeScreen), findsOneWidget);
-
-      // ...which remembers the acknowledgements.
-      await tester.tap(find.text('I already have a wallet'));
-      await _settle(tester);
-      expect(find.text(SeedSafetyCopy.title), findsNothing);
-      expect(
-        tester.widget<OnboardingScreen>(find.byType(OnboardingScreen)).initialMode,
-        OnboardingMode.import,
-      );
     },
     variant: _platforms,
     skip: kernelSkip != false,
@@ -158,7 +135,6 @@ void main() {
       await _settle(tester);
       await tester.tap(find.text('I already have a wallet'));
       await _settle(tester);
-      await _acceptSafetyAcks(tester);
 
       expect(
         tester.widget<OnboardingScreen>(find.byType(OnboardingScreen)).initialMode,
@@ -177,7 +153,6 @@ void main() {
       await _settle(tester);
       await tester.tap(find.text('Create a new wallet'));
       await _settle(tester);
-      await _acceptSafetyAcks(tester);
       expect(find.byType(OnboardingScreen), findsOneWidget);
 
       // What OnboardingScreen does once the vault is sealed; the app gate then
@@ -186,7 +161,7 @@ void main() {
         tester.element(find.byType(WelcomeScreen, skipOffstage: false)),
       );
       container.read(sessionProvider.notifier).state =
-          UnlockedVault(envelopeJson: '{}', sessionToken: 'test');
+          UnlockedVault(phrases: const {});
       await _settle(tester);
 
       expect(find.byType(OnboardingScreen), findsNothing);

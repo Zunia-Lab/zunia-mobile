@@ -9,7 +9,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * FlutterFragmentActivity is required for local_auth.
+ * FlutterFragmentActivity: BiometricPrompt (ZuniaSecurity) needs a FragmentActivity.
  *
  * FLAG_SECURE: handled via MethodChannel `com.zuniawallet.zunia_mobile/secure`
  * method `setFlagSecure` with argument `enabled: Boolean`. When true, sets
@@ -22,6 +22,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        ZuniaSecurity(this).register(flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, secureChannel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -69,6 +70,12 @@ class MainActivity : FlutterFragmentActivity() {
         // exit (a fade while the window slides up) would make the mark jump.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             splashScreen.setOnExitAnimationListener { view -> view.remove() }
+        }
+        // Recents shows a blank card instead of a screenshot of balances and
+        // addresses. Screenshots by the user stay possible (receive codes);
+        // phrase and password screens add FLAG_SECURE on top.
+        if (Build.VERSION.SDK_INT >= 33) {
+            setRecentsScreenshotEnabled(false)
         }
     }
 }
