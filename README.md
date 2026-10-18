@@ -11,61 +11,60 @@
 
 ## Overview
 
-Non-custodial multi-chain Cosmos wallet. Targets:
+Non-custodial multi-chain Cosmos wallet, version **0.1.0**, with the features of the Zunia browser extension 0.1.5 and what a phone adds: pairing with sites and apps by QR code or same-phone link, an in-app dApp browser, biometric unlock and local notifications. iOS follows iOS conventions and Android follows Material 3.
 
-| Platform | Output |
-|----------|--------|
-| Android | APK / App Bundle (`com.zuniawallet.zunia_mobile`) |
-| iOS | IPA (`com.zuniawallet.zuniaMobile`) |
+| Platform | Output | App id |
+|----------|--------|--------|
+| Android | APK / App Bundle | `com.zuniawallet.zunia_mobile` |
+| iOS | IPA | `com.zuniawallet.zuniaMobile` |
 
-Chain metadata comes from [zunia-chain-registry](https://github.com/Zunia-Lab/zunia-chain-registry). Visual tokens follow [zunia-brand](https://github.com/Zunia-Lab/zunia-brand) / [zunia-ui](https://github.com/Zunia-Lab/zunia-ui). Native crypto comes from [zunia-core](https://github.com/Zunia-Lab/zunia-core) GitHub Release artifacts.
+Chain metadata comes from [zunia-chain-registry](https://github.com/Zunia-Lab/zunia-chain-registry). Token names, IBC channels, the swap fee policy and explorer links are copied from the extension by `scripts/sync-extension-data.mjs` into `assets/data/`. Visual tokens and widgets come from [zunia-ui](https://github.com/Zunia-Lab/zunia-ui) (`packages/ui-flutter`, including its per-platform layer). User documentation: [docs.zunialab.com/docs/use-wallet/mobile](https://docs.zunialab.com/docs/use-wallet/mobile/).
 
-## Native FFI (`zunia_core`)
+## The kernel (`zunia_core`)
 
-Dart bindings live at `../zunia-core/packages/dart` (path dependency `zunia_core`). Prebuilt Android `.so` libs and the iOS `ZuniaCore.xcframework` are **not** built in this repo. Download them from a signed zunia-core release:
+Every derivation, seal and signature goes through the Rust kernel, [zunia-core](https://github.com/Zunia-Lab/zunia-core) 0.1.1, the same code the extension runs as WebAssembly. There is no Dart fallback: a build whose kernel does not load shows "This build cannot sign" instead of opening the wallet.
+
+- Dart bindings: `../zunia-core/packages/dart` (path dependency `zunia_core`). On iOS the plugin force-loads the vendored `ZuniaCore.xcframework` slice into its framework.
+- Android `.so` libraries come from a signed zunia-core release. The tag is pinned in `config/core_native.env`:
 
 ```bash
-# Requires GitHub CLI (`gh`) authenticated for private releases; public tags need no token.
-export ZUNIA_CORE_TAG=v0.1.0   # pin to the release you want
-./scripts/fetch-native.sh
+./scripts/fetch-native.sh            # uses config/core_native.env (ZUNIA_CORE_TAG=v0.1.1)
+ZUNIA_CORE_TAG=v0.1.1 ./scripts/fetch-native.sh
 ```
 
-The script:
+The script verifies `SHA256SUMS` and installs into `android/app/src/main/jniLibs/` and `ios/Frameworks/` (gitignored).
 
-1. Downloads `android-libs.tar.gz`, `ZuniaCore.xcframework.tar.gz`, and `SHA256SUMS`
-2. Verifies SHA-256 for those archives
-3. Installs into `android/app/src/main/jniLibs/` and `ios/Frameworks/`
+- Tests load a kernel built for the host: `cargo build -p zunia-ffi --release` in `../zunia-core` (or set `ZUNIA_FFI_LIB`). Tests that need it are skipped when it is missing.
+- `lib/tx/tx_engine.dart` is the only transaction path: read the account, simulate, price at the chosen speed, have the kernel preview, check the sign bytes match the preview, sign Direct, broadcast.
 
-Those directories are gitignored. CI can set repository variable `ZUNIA_CORE_TAG` to run the same step; if unset, analyze/test still run without native libs.
+## Connecting sites and apps
 
-## Secure connect
+| What | Where |
+|------|-------|
+| Zunia Connect v2 (QR or same-phone link, end-to-end encrypted over `wss://api.zunialab.com`) | `lib/services/native_connect_service.dart`, `lib/connect/` |
+| Return to the calling app (`ret`) and wake links (`zunia://connect/wake?sid=`) | `lib/connect/app_return.dart`, `lib/connect/connect_links.dart` |
+| WalletConnect v2 (`cosmos_getAccounts`, `cosmos_signDirect`, `cosmos_signAmino`, `cosmos_signArbitrary`) | `lib/services/wallet_connect_service.dart` |
+| In-app browser provider (`window.zunia`, opt-in `window.keplr`) | `lib/browser/` |
+| One review sheet for every request | `lib/screens/native_request_sheets.dart` |
+| Deep links, App Links, Universal Links | `lib/services/deep_link_handler.dart`, `AndroidManifest.xml`, `ios/Runner/*.entitlements` |
 
-Deep links, App / Universal Links, and WalletConnect v2 settings are registered; session code uses a stub/`reown_walletkit` interface until a project id is set.
-
-| Item | Location |
-|------|----------|
-| Canonical YAML | `config/connect.yaml` |
-| Dart constants | `lib/config/connect_config.dart` |
-| Deep link handler | `lib/services/deep_link_handler.dart` |
-| WC service | `lib/services/wallet_connect_service.dart` |
-| Env template | `.env.example` |
-| Android intents + HTTPS-only | `android/.../AndroidManifest.xml`, `network_security_config.xml` |
-| iOS URL schemes + ATS + camera | `ios/Runner/Info.plist` |
-| Associated domains | `ios/Runner/Runner.entitlements` |
+WalletConnect is active only in builds made with a project id:
 
 ```bash
-cp .env.example .env
-# set WALLETCONNECT_PROJECT_ID from https://cloud.walletconnect.com
 flutter run --dart-define=WALLETCONNECT_PROJECT_ID=$WALLETCONNECT_PROJECT_ID
 ```
 
-## Mnemonic / screen security
+Universal Links and Android App Links need `apple-app-site-association` and `assetlinks.json` on zunialab.com and link.zunialab.com (zunia-infra). Until they are published, only `zunia://` links open the app.
 
-Policy: `config/mnemonic_security.yaml`. Enforcement lives under `lib/security/` and `lib/crypto/keystore.dart` (secure storage wrapping key, biometrics gate, FLAG_SECURE channel, hold-to-reveal, clipboard auto-clear, 4-word verify, root warning stub).
+## Keys and security
+
+- Vault: each recovery phrase sealed by the kernel (Argon2id + XChaCha20-Poly1305), kept in the Keychain (this device only) or EncryptedSharedPreferences; no cloud backup or device transfer (`data_extraction_rules.xml`).
+- Biometric unlock is hardware-bound: a Keychain item with `.biometryCurrentSet` on iOS, an Android Keystore key used through `BiometricPrompt` with a `CryptoObject` (`ZuniaSecurity.kt`, `AppDelegate.swift`).
+- Auto-lock, a password throttle, "password on every signature", change password, screenshot blocking on phrase and password screens, an app-switcher cover. Policy: `config/mnemonic_security.yaml`; code: `lib/crypto/keystore.dart`, `lib/security/`.
 
 ## Status
 
-In development (alpha). Not on App Store / Play Store yet.
+In development. Not on the App Store or Google Play yet.
 
 ## Related repositories
 
@@ -83,7 +82,8 @@ In development (alpha). Not on App Store / Play Store yet.
 
 ## Requirements
 
-- [Flutter](https://docs.flutter.dev/get-started/install) 3.24+ (stable)
+- [Flutter](https://docs.flutter.dev/get-started/install) 3.41+ (stable), Dart 3.11+
+- Rust (for host tests only; `rust-toolchain.toml` in zunia-core pins it)
 - Xcode (iOS) / Android Studio SDK (Android)
 - Optional: `gh` CLI to fetch native release artifacts
 
@@ -94,8 +94,7 @@ flutter doctor
 ## Quick start
 
 ```bash
-# Optional when a zunia-core release exists:
-# ZUNIA_CORE_TAG=v0.1.0 ./scripts/fetch-native.sh
+./scripts/fetch-native.sh   # Android kernel libraries, pinned in config/core_native.env
 
 flutter pub get
 flutter run                 # connected device / simulator
@@ -106,7 +105,7 @@ flutter run -d android
 ## Build release outputs
 
 ```bash
-ZUNIA_CORE_TAG=v0.1.0 ./scripts/fetch-native.sh
+./scripts/fetch-native.sh
 
 # Android App Bundle (Play Store)
 flutter build appbundle --release
@@ -114,7 +113,7 @@ flutter build appbundle --release
 # Android APK
 flutter build apk --release
 
-# iOS (requires signing in Xcode; link ios/Frameworks/ZuniaCore.xcframework)
+# iOS (requires signing in Xcode)
 flutter build ipa --release
 ```
 
@@ -128,19 +127,21 @@ Artifacts:
 
 ```
 lib/
-  main.dart
-  crypto/keystore.dart
-  security/                 # FLAG_SECURE, clipboard, integrity, screen blur
-  services/                 # deep links, WC, push stub
-  screens/                  # onboarding, unlock, portfolio, send/receive, QR, settings
-  theme/zunia_theme.dart
-  widgets/
-scripts/fetch-native.sh
-config/connect.yaml
-config/mnemonic_security.yaml
-android/                    # Android host + jniLibs (fetched)
-ios/                        # iOS host + Frameworks (fetched)
-assets/brand/
+  main.dart                 # boot: catalog, custom chains, preferences, token table
+  crypto/                   # WalletKernel (the Rust kernel), keystore v2, legacy migration
+  tx/                       # TxMsg, TxEngine (simulate, preview, sign, broadcast)
+  security/                 # vault session, biometrics, auto-lock, signing gate, capture
+  connect/                  # Zunia Connect crypto, pairing and wake links, app return
+  services/                 # Connect v2, WalletConnect, deep links, chain clients
+  browser/                  # in-app provider, grants, review model, origin risk
+  tokens/ prices/ portfolio/ transfers/ activity/ swap/ notifications/
+  state/                    # Riverpod state
+  screens/                  # every screen; screens/tabs/ for the five root tabs
+  ui/ widgets/              # app widgets (zunia_ui holds the shared ones)
+assets/data/                # copied from the extension (sync-extension-data.mjs)
+integration_test/           # screenshot tour
+scripts/                    # fetch-native.sh, sync-extension-data.mjs, brand-assets.py
+config/                     # core_native.env, connect, interchain, security policy
 ```
 
 ## Development
@@ -148,7 +149,9 @@ assets/brand/
 | Command | Description |
 |---------|-------------|
 | `flutter run` | Debug on device/simulator |
-| `flutter test` | Widget tests |
+| `flutter test` | Unit and widget tests (build the host kernel first) |
+| `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/tour_test.dart -d <device>` | Walk a real build and save screenshots to `build/shots` (never signs) |
+| `node scripts/sync-extension-data.mjs` | Refresh `assets/data/` from the extension |
 | `flutter analyze` | Static analysis |
 | `./scripts/fetch-native.sh` | Download pinned zunia-core natives |
 | `flutter build apk` | Android release APK |

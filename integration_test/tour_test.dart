@@ -4,6 +4,8 @@
 //
 //   flutter drive --driver=test_driver/integration_test.dart \
 //     --target=integration_test/tour_test.dart -d <device>
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -36,6 +38,9 @@ void main() {
 
   testWidgets('tour', (tester) async {
     app.main();
+    // Android renders to a texture the screenshot call cannot read until it
+    // is switched to an image surface.
+    if (Platform.isAndroid) await binding.convertFlutterSurfaceToImage();
     await wait(tester, 6000);
     await shot(tester, '01-welcome');
 
