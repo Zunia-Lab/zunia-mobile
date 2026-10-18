@@ -45,26 +45,28 @@ void main() {
     await shot(tester, '01-welcome');
 
     await tapText(tester, 'I already have a wallet');
-    await shot(tester, '02-restore');
-    await tester.enterText(find.byType(TextField).first, _phrase);
-    await wait(tester);
+    await shot(tester, '02-protect');
     await tapText(tester, 'I will never share my recovery phrase with anyone.');
     await tapText(
       tester,
       'I accept that Zunia cannot recover a lost phrase, and I will keep an offline backup.',
     );
-    await shot(tester, '03-restore-filled');
+    await tapText(tester, 'Continue');
+    await shot(tester, '03-restore');
+    await tester.enterText(find.byType(TextField).first, _phrase);
+    await wait(tester);
+    await shot(tester, '04-restore-filled');
     await tapText(tester, 'Continue');
 
     final fields = find.byType(TextField);
     await tester.enterText(fields.at(1), 'tour-password-1');
     await tester.enterText(fields.at(2), 'tour-password-1');
     await wait(tester);
-    await shot(tester, '04-password');
+    await shot(tester, '05-password');
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tapText(tester, 'Continue');
     await wait(tester, 4000);
-    await shot(tester, '05-networks');
+    await shot(tester, '06-networks');
     await tester.tap(find.textContaining('Continue ·').first);
     await wait(tester, 2000);
     if (find.text('Skip for now').evaluate().isNotEmpty) {
@@ -74,13 +76,13 @@ void main() {
       await tapText(tester, 'Not now');
     }
     await wait(tester, 12000);
-    await shot(tester, '06-home');
+    await shot(tester, '07-home');
 
     for (final (tab, name) in [
-      ('Swap', '07-swap'),
-      ('Earn', '08-earn'),
-      ('Discover', '09-discover'),
-      ('Activity', '10-activity'),
+      ('Swap', '08-swap'),
+      ('Earn', '09-earn'),
+      ('Discover', '10-discover'),
+      ('Activity', '11-activity'),
     ]) {
       await tester.tap(find.text(tab).last);
       await wait(tester, 6000);
@@ -91,9 +93,9 @@ void main() {
     await wait(tester, 2000);
     await tester.tap(find.byTooltip('Menu').first);
     await wait(tester, 1500);
-    await shot(tester, '11-drawer');
+    await shot(tester, '12-drawer');
     await tapText(tester, 'Settings & security');
     await wait(tester, 2000);
-    await shot(tester, '12-settings');
+    await shot(tester, '13-settings');
   });
 }

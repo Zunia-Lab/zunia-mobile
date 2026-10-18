@@ -81,12 +81,15 @@ void main() {
       (tester) async {
     await pump(tester, const OnboardingScreen(initialMode: OnboardingMode.create));
 
-    // Nothing to reveal before the two statements are ticked.
-    final reveal = find.widgetWithText(ZuniaButton, 'Reveal');
-    expect(tester.widget<ZuniaButton>(reveal).onPressed, isNull);
+    // The first step is the two promises. Continue stays off until both.
+    final gate = find.widgetWithText(ZuniaButton, 'Continue');
+    expect(tester.widget<ZuniaButton>(gate).onPressed, isNull);
     await tester.tap(find.textContaining('I will never share'));
     await tester.tap(find.textContaining('I accept that Zunia'));
     await tester.pumpAndSettle();
+    await tapText(tester, 'Continue');
+
+    final reveal = find.widgetWithText(ZuniaButton, 'Reveal');
     await tester.ensureVisible(reveal);
     await tester.tap(reveal);
     await tester.pumpAndSettle();
@@ -130,6 +133,7 @@ void main() {
     await tester.tap(find.textContaining('I will never share'));
     await tester.tap(find.textContaining('I accept that Zunia'));
     await tester.pumpAndSettle();
+    await tapText(tester, 'Continue');
 
     final field = find.byType(TextField);
     await tester.enterText(field, _restore.replaceFirst('about', 'abuot'));

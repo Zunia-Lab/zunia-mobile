@@ -18,9 +18,8 @@ import 'package:zunia_ui/zunia_ui.dart';
 /// ways a dApp connects) and the scene follows the finger, so the story is
 /// scrubbed rather than played.
 ///
-/// The recovery-phrase acknowledgements are asked here, once, before either
-/// flow opens (as the extension's welcome does); OnboardingScreen started with
-/// an [OnboardingMode] does not repeat them.
+/// Create and restore ask the recovery-phrase acknowledgements on their own
+/// first step. This screen only chooses which flow to open.
 class WelcomeScreen extends ConsumerStatefulWidget {
   const WelcomeScreen({super.key});
 
@@ -100,8 +99,7 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen>
     if (_opening) return;
     _opening = true;
     try {
-      // The flow asks the recovery-phrase acknowledgements itself, next to
-      // the phrase they are about.
+      // The flow's first step asks the recovery-phrase acknowledgements.
       ZuniaHaptics.light();
       await Navigator.of(context).push(_onboardingRoute(mode));
     } finally {

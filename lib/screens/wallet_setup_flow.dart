@@ -3,11 +3,13 @@
 /// CreateWalletScreen / ImportWalletScreen do with their `onboard` and `add`
 /// variants.
 ///
-/// Create: phrase (12 or 24 words) -> verify (4 or 6 words) -> password, or
-/// name when adding -> networks. Restore: phrase (pasted or typed, word count
+/// Create: accept the two phrase promises -> phrase (12 or 24 words) ->
+/// verify (4 or 6 words) -> password, or name when adding -> networks.
+/// Restore: the same promises -> phrase (pasted or typed, word count
 /// detected, every word and the checksum checked) -> password / name ->
 /// networks -> an offer to verify the written copy. A restored phrase is
-/// never marked verified just because it was typed in.
+/// never marked verified just because it was typed in. Adding an account
+/// skips the promises; the wallet already asked them.
 library;
 
 import 'dart:async';
@@ -80,7 +82,7 @@ String normalizeImportedPhrase(String text) {
   return tokens.join(' ');
 }
 
-enum _Step { phrase, verify, password, name, networks, offerVerify, importVerify }
+enum _Step { safety, phrase, verify, password, name, networks, offerVerify, importVerify }
 
 class WalletSetupFlow extends ConsumerStatefulWidget {
   const WalletSetupFlow({
@@ -115,7 +117,7 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
   final _chainSearch = TextEditingController();
   final _confirmFocus = FocusNode();
 
-  _Step _step = _Step.phrase;
+  _Step _step = _Step.safety;
   String? _mnemonic;
   String? _error;
   bool _busy = false;
@@ -140,6 +142,7 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
   String get _imported => normalizeImportedPhrase(_importPhrase.text);
 
   List<_Step> get _steps => [
+        if (!widget.adding) _Step.safety,
         _Step.phrase,
         if (_create) _Step.verify,
         widget.adding ? _Step.name : _Step.password,
@@ -156,6 +159,7 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
     _selectedChains = widget.adding
         ? {...wallet.enabledChainIds}
         : {'safrochain-1', 'cosmoshub-4', 'osmosis-1'};
+    if (widget.adding) _step = _Step.phrase;
     _importPhrase.addListener(_followImportedWordCount);
     if (_create) _regenerate();
     if (widget.adding) {
@@ -250,8 +254,14 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
   void _back() {
     FocusManager.instance.primaryFocus?.unfocus();
     switch (_step) {
-      case _Step.phrase:
+      case _Step.safety:
         widget.onExit();
+      case _Step.phrase:
+        if (widget.adding) {
+          widget.onExit();
+        } else {
+          _go(_Step.safety);
+        }
       case _Step.verify:
         _go(_Step.phrase);
       case _Step.password:
@@ -266,10 +276,6 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
   }
 
   void _phraseContinue() {
-    if (!_acksOk) {
-      _setError('Tick both statements above to continue.');
-      return;
-    }
     if (_create) {
       if (!_revealed && !_copied) {
         _setError('Reveal or copy your phrase before continuing.');
@@ -479,13 +485,18 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
 
   List<Widget> _body() {
     switch (_step) {
+      case _Step.safety:
+        return _safetyBody();
       case _Step.phrase:
         return _create ? _createPhraseBody() : _importPhraseBody();
       case _Step.verify:
         return [
           _progress(_Step.verify, 'Verify'),
           const SizedBox(height: 22),
-          BackupQuiz(words: _words, onPassed: () => _go(_steps[2])),
+          BackupQuiz(
+            words: _words,
+            onPassed: () => _go(widget.adding ? _Step.name : _Step.password),
+          ),
           _errorBlock(),
         ];
       case _Step.password:
@@ -586,6 +597,18 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
     ];
   }
 
+  List<Widget> _safetyBody() {
+    return [
+      _progress(_Step.safety, 'Protect'),
+      const SizedBox(height: 22),
+      const ZuniaStepHeading(
+        title: SeedSafetyCopy.title,
+        subtitle: SeedSafetyCopy.summary,
+      ),
+      ..._acks(),
+    ];
+  }
+
   List<Widget> _createPhraseBody() {
     final s = ZuniaSemanticsExt.of(context);
     return [
@@ -603,7 +626,6 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
         body: SeedSafetyCopy.summary,
         tone: ZuniaCalloutTone.warning,
       ),
-      ..._acks(),
       const SizedBox(height: 16),
       ZuniaSegmented<int>(
         value: _wordCount,
@@ -627,7 +649,7 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
                     ? Icons.visibility_off_outlined
                     : Icons.visibility_outlined,
               ),
-              onPressed: _acksOk ? _toggleReveal : null,
+              onPressed: _toggleReveal,
             ),
           ),
           const SizedBox(width: 10),
@@ -637,7 +659,7 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
               size: ZuniaButtonSize.sm,
               variant: ZuniaButtonVariant.secondary,
               leading: Icon(_copied ? Icons.check : Icons.copy_outlined),
-              onPressed: _acksOk ? _copyPhrase : null,
+              onPressed: _copyPhrase,
             ),
           ),
         ],
@@ -685,7 +707,6 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
         subtitle: 'Enter the 12 or 24 words of a recovery phrase, in order. '
             'Pasting a numbered list works too.',
       ),
-      ..._acks(),
       const SizedBox(height: 16),
       ZuniaSegmented<int>(
         value: _wordCount,
@@ -906,20 +927,23 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
 
   Widget _footer() {
     switch (_step) {
+      case _Step.safety:
+        return _actions(
+          primaryLabel: 'Continue',
+          onPrimary: _acksOk ? () => _go(_Step.phrase) : null,
+        );
       case _Step.phrase:
         if (_create) {
           return _actions(
             primaryLabel: 'I have written it down',
-            onPrimary:
-                _acksOk && (_copied || _revealed) ? _phraseContinue : null,
+            onPrimary: (_copied || _revealed) ? _phraseContinue : null,
           );
         }
         return ListenableBuilder(
           listenable: _importPhrase,
           builder: (context, _) => _actions(
             primaryLabel: 'Continue',
-            onPrimary:
-                _acksOk && _imported.isNotEmpty ? _phraseContinue : null,
+            onPrimary: _imported.isNotEmpty ? _phraseContinue : null,
           ),
         );
       case _Step.verify:

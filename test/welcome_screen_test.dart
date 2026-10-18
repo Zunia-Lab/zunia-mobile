@@ -115,7 +115,7 @@ void main() {
       expect(onboarding.initialMode, OnboardingMode.create);
       // Straight into the flow: onboarding's own welcome step is not shown.
       expect(find.text('Create a new wallet'), findsNothing);
-      // The flow asks the acknowledgements beside the phrase they are about.
+      // The first step of the flow is the two recovery-phrase promises.
       expect(find.text(SeedSafetyCopy.ackUnderstand), findsOneWidget);
 
       // The system back (gesture or button) leaves the flow's first step.
@@ -140,7 +140,7 @@ void main() {
         tester.widget<OnboardingScreen>(find.byType(OnboardingScreen)).initialMode,
         OnboardingMode.import,
       );
-      expect(find.text('Restore wallet'), findsWidgets);
+      expect(find.text('Protect your phrase'), findsOneWidget);
     },
     variant: _platforms,
     skip: kernelSkip != false,

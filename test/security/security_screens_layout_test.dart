@@ -67,6 +67,15 @@ void main() {
       await _pump(tester, platform, const OnboardingScreen());
       await tester.tap(find.text('Create a new wallet'));
       await tester.pumpAndSettle();
+      expect(find.textContaining('I will never share'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(find.textContaining('I will never share'));
+      await tester.tap(find.textContaining('I will never share'));
+      await tester.ensureVisible(find.textContaining('I accept that Zunia'));
+      await tester.tap(find.textContaining('I accept that Zunia'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
       expect(find.text('I have written it down'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -76,6 +85,15 @@ void main() {
         platform,
         const OnboardingScreen(initialMode: OnboardingMode.import),
       );
+      expect(find.textContaining('I accept that Zunia'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(find.textContaining('I will never share'));
+      await tester.tap(find.textContaining('I will never share'));
+      await tester.ensureVisible(find.textContaining('I accept that Zunia'));
+      await tester.tap(find.textContaining('I accept that Zunia'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
       expect(find.text('Restore wallet'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
