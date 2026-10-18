@@ -8,39 +8,19 @@ import 'package:zunia_mobile/connect/cosmos_signing.dart';
 import 'package:zunia_mobile/connect/sign_in.dart';
 import 'package:zunia_mobile/connect/wallet_signer.dart';
 import 'package:zunia_mobile/providers.dart';
-import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
+import 'package:zunia_mobile/screens/pair_device.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// Routes a scanned code. Zunia pairing codes start pairing, and the approval
-/// sheet opens once the site's request arrives; anything else goes to the
-/// WalletConnect sheet.
+/// Routes a scanned code: pairing codes (Zunia Connect, WalletConnect), wake
+/// links, sites and addresses. See `routeScannedCode` in pair_device.dart.
 Future<void> handleScannedCode(
   BuildContext context,
   WidgetRef ref,
   String code,
-) async {
-  if (!NativeConnectService.isPairingLink(code)) {
-    await showDappConnectSheet(context, uri: code);
-    return;
-  }
-  final messenger = ScaffoldMessenger.of(context);
-  messenger.showSnackBar(
-    const SnackBar(
-      content: Text('Contacting the site…'),
-      duration: Duration(seconds: 30),
-    ),
-  );
-  try {
-    await ref.read(nativeConnectProvider).pair(code);
-    messenger.hideCurrentSnackBar();
-  } catch (error) {
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(_messageOf(error))));
-  }
-}
+) =>
+    routeScannedCode(context, ref, code);
 
 String _messageOf(Object error) => error is ConnectException
     ? error.message
@@ -158,8 +138,11 @@ class _NativeConnectSheetState extends ConsumerState<_NativeConnectSheet> {
         ],
         if (callout != null) ...[const SizedBox(height: 14), callout],
         const SizedBox(height: 16),
-        _VerificationCode(request.verificationCode),
-        const SizedBox(height: 16),
+        // WalletConnect has no code to compare.
+        if (request.verificationCode.isNotEmpty) ...[
+          _VerificationCode(request.verificationCode),
+          const SizedBox(height: 16),
+        ],
         Text(
           'The site will see your addresses on the chains below and can ask '
           'you to sign. Nothing is signed without your approval here.',
@@ -170,8 +153,9 @@ class _NativeConnectSheetState extends ConsumerState<_NativeConnectSheet> {
           rows: [
             ('Wallet', wallet.active?.name ?? 'Wallet'),
             ('Chains', request.chains.join(', ')),
-            ('Session', 'Zunia Connect, end-to-end encrypted'),
-            ('Expires', '24 hours after approval'),
+            ('Session', request.transportLabel),
+            ('Expires', request.expiryLabel),
+            if (request.returnLabel != null) ('Then', request.returnLabel!),
           ],
         ),
         if (_error != null) ...[
@@ -279,6 +263,13 @@ class _NativeSignSheetState extends ConsumerState<_NativeSignSheet> {
         if (callout != null) ...[const SizedBox(height: 14), callout],
         const SizedBox(height: 14),
         ..._body(context, wallet.active?.name),
+        if (request.returnLabel != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            'Then: ${request.returnLabel}',
+            style: zuniaSans(fontSize: 12.5, color: s.fgMuted),
+          ),
+        ],
         if (_error != null) ...[
           const SizedBox(height: 12),
           Text(
@@ -560,7 +551,7 @@ class _VerificationCode extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'The site shows a code too. If the two codes differ, reject.',
+            'Check this code matches the site. If it does not, reject.',
             textAlign: TextAlign.center,
             style: zuniaSans(fontSize: 12, height: 1.45, color: s.fgMuted),
           ),

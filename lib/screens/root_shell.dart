@@ -3,19 +3,16 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:zunia_mobile/connect/wallet_signer.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
 import 'package:zunia_mobile/screens/address_book_screen.dart';
 import 'package:zunia_mobile/screens/bridge_screen.dart';
+import 'package:zunia_mobile/screens/connect_inbox.dart';
 import 'package:zunia_mobile/screens/governance_screen.dart';
-import 'package:zunia_mobile/screens/native_request_sheets.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/notifications_screen.dart';
-import 'package:zunia_mobile/screens/dapp_browser_screen.dart';
-import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
-import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
+import 'package:zunia_mobile/screens/pair_device.dart';
 import 'package:zunia_mobile/screens/rewards_screen.dart';
 import 'package:zunia_mobile/screens/sessions_screen.dart';
 import 'package:zunia_mobile/screens/settings_screen.dart';
@@ -24,9 +21,6 @@ import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
 import 'package:zunia_mobile/screens/tabs/home_tab.dart';
 import 'package:zunia_mobile/screens/tabs/missions_tab.dart';
 import 'package:zunia_mobile/screens/tabs/swap_tab.dart';
-import 'package:zunia_mobile/services/deep_link_handler.dart';
-import 'package:zunia_mobile/services/native_connect_service.dart';
-import 'package:zunia_mobile/services/wallet_connect_service.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -83,115 +77,6 @@ class _RootShellState extends ConsumerState<RootShell> {
   ];
 
   String _tab = 'home';
-  final _subs = <StreamSubscription<dynamic>>[];
-  ProviderSubscription<int?>? _accountSub;
-  bool _sheetOpen = false;
-
-  @override
-  void initState() {
-    super.initState();
-    Future.microtask(_listenConnect);
-  }
-
-  void _listenConnect() {
-    if (!mounted) return;
-    final native = ref.read(nativeConnectProvider);
-    final wc = ref.read(walletConnectProvider);
-    final deep = ref.read(deepLinkHandlerProvider);
-
-    _subs.add(native.changes.listen((_) => _showNextNativeRequest()));
-    _subs.add(native.notices.listen(_onNativeNotice));
-    _subs.add(wc.sessionProposals.listen(_onWcProposal));
-    _subs.add(deep.links.listen(_onDeepLink));
-    _accountSub = ref.listenManual<int?>(
-      walletProvider.select((w) => w.active?.index),
-      _onAccountChanged,
-    );
-    // Requests that arrived while the wallet was locked.
-    _showNextNativeRequest();
-  }
-
-  Future<void> _onDeepLink(Uri uri) async {
-    if (!mounted) return;
-    final dappUrl = DeepLinkHandler.parseDappUrl(uri);
-    if (dappUrl == null || dappUrl.isEmpty) return;
-    await DappBrowserScreen.open(context, url: dappUrl);
-  }
-
-  void _onNativeNotice(NativeConnectNotice notice) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(notice.message)),
-    );
-  }
-
-  /// Shows what sites asked for, one sheet at a time, oldest first.
-  Future<void> _showNextNativeRequest() async {
-    if (!mounted || _sheetOpen) return;
-    final native = ref.read(nativeConnectProvider);
-    final pending = native.pendingRequests;
-    if (pending.isEmpty) return;
-    final request = pending.first;
-    _sheetOpen = true;
-    try {
-      switch (request) {
-        case NativeConnectRequest():
-          await showNativeConnectSheet(context, request: request);
-          // Dismissed without a choice: that is a no.
-          if (native.isPending(request)) await native.rejectConnect(request);
-        case NativeSignRequest():
-          await showNativeSignSheet(context, request: request);
-          if (native.isPending(request)) await native.rejectSign(request);
-      }
-    } catch (e) {
-      debugPrint('native request: $e');
-    } finally {
-      _sheetOpen = false;
-    }
-    unawaited(_showNextNativeRequest());
-  }
-
-  void _onAccountChanged(int? previous, int? next) {
-    if (next == null || previous == null || previous == next) return;
-    final phrase = ref.read(phraseProvider);
-    if (phrase == null) return;
-    final name = ref.read(walletProvider).active?.name;
-    unawaited(
-      ref.read(nativeConnectProvider).switchAccount(
-            accountIndex: next,
-            accountsFor: (chainIds) => connectAccountsFor(
-              phrase: phrase,
-              accountIndex: next,
-              chainIds: chainIds,
-              accountName: name,
-            ),
-          ),
-    );
-  }
-
-  Future<void> _onWcProposal(WcSessionProposal proposal) async {
-    if (!mounted || _sheetOpen) return;
-    _sheetOpen = true;
-    try {
-      await showDappConnectSheet(
-        context,
-        offer: DappConnectOffer.fromWcProposal(proposal),
-      );
-    } finally {
-      _sheetOpen = false;
-    }
-    unawaited(_showNextNativeRequest());
-  }
-
-  @override
-  void dispose() {
-    for (final sub in _subs) {
-      sub.cancel();
-    }
-    _accountSub?.close();
-    super.dispose();
-  }
-
   void _open(Widget screen) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
@@ -201,8 +86,11 @@ class _RootShellState extends ConsumerState<RootShell> {
     _open(screen);
   }
 
+  // Requests from connected sites and apps show over whichever tab is open.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ConnectInbox(child: _shell(context));
+
+  Widget _shell(BuildContext context) {
     final index = _tabs.indexWhere((t) => t.id == _tab);
     final s = ZuniaSemanticsExt.of(context);
     return DecoratedBox(
@@ -223,16 +111,8 @@ class _RootShellState extends ConsumerState<RootShell> {
           onMissions: () => _fromDrawer(const _MissionsPage()),
           onRewards: () => _fromDrawer(const RewardsScreen()),
           onPair: () {
-            final nav = Navigator.of(context);
-            nav.pop();
-            nav
-                .push<String>(
-              MaterialPageRoute(builder: (_) => const QrScannerScreen()),
-            )
-                .then((code) {
-              if (!context.mounted || code == null || code.isEmpty) return;
-              handleScannedCode(context, ref, code);
-            });
+            Navigator.of(context).pop();
+            unawaited(openPairDevice(context, ref));
           },
           onSessions: () => _fromDrawer(const SessionsScreen()),
           onAddressBook: () => _fromDrawer(const AddressBookScreen()),
