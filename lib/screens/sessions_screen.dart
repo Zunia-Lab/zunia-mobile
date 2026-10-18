@@ -57,7 +57,7 @@ class ConnectedApp {
     pairedAt: s.pairedAt,
     expiresAt: s.expiresAt.millisecondsSinceEpoch == 0 ? null : s.expiresAt,
     sameDevice: s.sameDevice,
-    returnLabel: s.returnTarget?.label,
+    returnLabel: s.sameDevice ? s.returnTarget?.label : null,
   );
 
   factory ConnectedApp.walletConnect(WcActiveSession s) {
