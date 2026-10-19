@@ -1,23 +1,52 @@
-Zunia is a self-custody wallet for the Cosmos ecosystem. Your recovery phrase is created on your phone, encrypted with your password, and never leaves the device.
+Zunia is a self-custody wallet for the Cosmos ecosystem. Your keys are created or restored on this phone, sealed with your password and kept here. There is no Zunia account and no sign-up. Zunia never holds your funds and cannot recover a lost recovery phrase.
 
-WHAT YOU CAN DO
-• Hold and follow tokens on 220+ Cosmos networks, including Cosmos Hub, Osmosis, Celestia, Akash and Safrochain.
-• Send and receive with QR codes, an address book and payment links.
-• Swap tokens through Osmosis routes. The route and every fee, including Zunia's 0.5% swap fee, are shown before you confirm.
-• Move tokens between chains over IBC.
-• Stake with validators, claim rewards and follow your positions.
-• Vote on governance proposals.
-• See your collectibles (NFTs) and a readable history of every transaction.
+One wallet for Cosmos networks
+• More than 220 Cosmos mainnet networks in the built-in catalog. Safrochain, Cosmos Hub and Osmosis are on at setup. Turn on the others you use, or add a network by hand.
+• One portfolio for every network you turn on, with indicative prices in USD, EUR, GBP, JPY or CHF.
+• Hide amounts with one tap.
+• Several accounts, each with its own recovery phrase, all unlocked by one password.
 
-CONNECT TO APPS
-• Open web apps in the built-in browser. They find Zunia the way they find a wallet extension, and every request appears as a native approval sheet.
-• Connect a website on your computer by scanning its QR code. Both screens show the same six digits, so you know you are pairing with the right site. Messages travel end-to-end encrypted, and you approve each transaction on your phone.
+Send across chains
+• Send any token on the same chain, or to another chain over IBC.
+• Before you sign, Zunia checks the route: the channel is open and both ends are active.
+• Receive with a QR code, or put a token, an amount and a memo into a payment request.
+• Keep the addresses you use often in an address book.
 
-BUILT FOR SAFETY
-• Zunia asks for your password before every signature. Face ID or your fingerprint can unlock the wallet.
-• Before you sign, Zunia decodes the transaction and shows what it does, on which network, and the fee.
-• Alerts for incoming transfers and other wallet activity.
-• No account, no tracking, no ads.
-• Open source under the Apache 2.0 license.
+Swap
+• Swap tokens through Osmosis, also when your tokens sit on another chain.
+• Each swap made on the Swap screen carries a 0.5% Zunia fee, paid in the token you sell. The review shows it before you sign.
+• If a swap that starts on another chain fails on Osmosis, the amount swapped comes back to you. The fee does not.
 
-Keep your recovery phrase offline. Anyone who has it controls your funds, and Zunia cannot recover it for you. Zunia never asks for it outside the wallet's own backup screens.
+Stake and vote
+• Stake with a validator, unstake, and claim your rewards.
+• Read proposals and vote Yes, No, Veto or Abstain.
+• Zunia takes no cut of staking rewards.
+
+Use dApps
+• Browse dApps inside Zunia. A site asks to connect for the networks it needs, and you approve each one.
+• Pair with a website by scanning its QR code. Both screens show the same 6-digit code, and messages are end-to-end encrypted through Zunia's relay.
+• Every request opens the same review: what it does, the fee, and warnings for lookalike sites, first-time recipients and messages Zunia cannot decode.
+
+Keep it locked
+• Unlock with your fingerprint or another strong biometric, or with your password.
+• Auto-lock after 1, 5, 10 or 30 minutes.
+• Turn on "Password on every signature" to confirm each transaction again.
+• Screenshots and screen recording are blocked on the recovery phrase, unlock and password screens.
+• A copied phrase is cleared from the clipboard after 30 seconds.
+• Your phrase stays in encrypted storage on this phone. Cloud backup and device transfer never copy it.
+
+Stay informed
+• Activity for your networks, with the details of each transaction.
+• Notifications for tokens arriving, rewards to claim, unbonding and proposals. Zunia raises them itself while it is open and unlocked. No push server is involved.
+• See and send your NFTs.
+
+Fees
+Zunia has no subscription, no premium tier and no token. Every transaction pays a network fee to the chain, shown before you sign. Sends, IBC transfers, staking and votes carry no Zunia fee. Only swaps made on Zunia's Swap screen carry the 0.5% Zunia fee.
+
+One phrase, browser and phone
+The same recovery phrase gives the same addresses in the Zunia browser extension. Each device keeps its own encrypted copy. Nothing syncs through a server.
+
+Open source
+The app's code is public at github.com/Zunia-Lab, under the Apache 2.0 license.
+
+Keep your recovery phrase offline. Zunia will never ask for it, by email, in a chat or anywhere else.

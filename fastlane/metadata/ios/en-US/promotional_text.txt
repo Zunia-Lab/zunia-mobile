@@ -1,1 +1,1 @@
-One self-custody wallet for every Cosmos chain. Send, swap, stake, vote and connect web apps by QR code, with each signature approved on your phone.
+A self-custody wallet for Cosmos networks. Send over IBC, stake, vote and swap. No account to create. Swaps on the Swap screen carry a 0.5% Zunia fee.

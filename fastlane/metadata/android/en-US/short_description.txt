@@ -1,1 +1,1 @@
-Self-custody wallet for 220+ Cosmos chains: send, swap, stake, connect apps.
+Self-custody Cosmos wallet. Send over IBC, stake, vote and swap. No account.
