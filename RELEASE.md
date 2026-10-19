@@ -8,17 +8,11 @@ Version **0.1.0 (build 2)**. Section 1 is done in this repository. Sections 3 an
 |---|---|---|
 | Android App Bundle | `build/app/outputs/bundle/release/app-release.aab` | Signed with the upload key (`CN=Zunia Lab`, SHA-256 `89:15:A3:03:…:74:62:99`). Targets SDK 36. Every 64-bit native library is 16 KB aligned, as Play requires. |
 | iOS release build | `flutter build ipa --no-codesign` passes | iPhone only. Privacy manifest: no tracking, no data collected. App Store export options are in `ios/ExportOptions.plist`. |
-| Store texts | `fastlane/metadata/android/en-US/`, `fastlane/metadata/ios/en-US/` | Every field is within its store's limit. Fees are disclosed (0.5% swap fee). |
-| Play graphics | `fastlane/metadata/android/en-US/images/` | `icon.png` (512×512), `featureGraphic.png` (1024×500), `phoneScreenshots/` (1080×1920). |
-| App Store screenshots | `fastlane/screenshots/en-US/` | iPhone 6.9″ (1320×2868), the size App Store Connect requires. |
+| Store texts | `fastlane/metadata/android/<locale>/`, `fastlane/metadata/ios/<locale>/` | Each field is within its store's limit. The 0.5% swap fee is disclosed. |
+| Play graphics | `fastlane/metadata/android/<locale>/images/` | Icon, feature graphic and phone screenshots. |
+| App Store screenshots | `fastlane/screenshots/<locale>/` | One set per size App Store Connect asks for. |
 
-The screenshots come from a test wallet with almost no funds. For a stronger listing, retake them with a funded demo wallet:
-
-```bash
-ZUNIA_SHOTS=<dir> flutter drive --driver=test_driver/integration_test.dart --target=integration_test/tour_test.dart -d <iPhone 17 Pro Max simulator>
-```
-
-Then frame them the same way.
+The full EN/FR asset set (texts, screenshots from a funded demo wallet, every store size) is produced in zunia-motion (`out/store-0.1.0/`) and committed into `fastlane/`. Check the files there before you upload.
 
 ## 2. The Play upload key
 
@@ -43,7 +37,7 @@ Then frame them the same way.
    - App access: no login needed.
    - Target audience: 18+.
    - Content rating: fill in the questionnaire.
-   - Data safety: no data collected or shared. Traffic is encrypted in transit.
+   - Data safety: Zunia itself collects nothing, but the Android QR scanner runs on Google ML Kit, which sends Google a per-install identifier and diagnostics. Declare **Device or other IDs** and **Diagnostics**: collected, not shared. Check the list against [ML Kit's data disclosure](https://developers.google.com/ml-kit/android-data-disclosure). Traffic is encrypted in transit. Wallet addresses and transactions go to public chain nodes only when the person sends or signs.
    - Financial features: cryptocurrency wallet, non-custodial.
 5. **Store listing.**
    - Texts and graphics: `fastlane/metadata/android/en-US/`.
@@ -72,7 +66,7 @@ Then frame them the same way.
    ```
    Upload `build/ios/ipa/*.ipa` with Transporter, or with Xcode → Organizer → Distribute App.
 5. **Questionnaires.**
-   - **App Privacy:** Data Not Collected, which matches `ios/Runner/PrivacyInfo.xcprivacy`.
+   - **App Privacy:** Data Not Collected, which matches `ios/Runner/PrivacyInfo.xcprivacy`. On iOS the QR scanner uses Apple's Vision framework, not ML Kit.
    - **Age rating:** answer **Unrestricted Web Access: Yes**, because the built-in browser opens any site.
    - **Export compliance:** the app uses standard encryption (the vault and the end-to-end encrypted connect messages). Answer the questions in App Store Connect. Once the answer is settled, add `ITSAppUsesNonExemptEncryption` to `Info.plist` so App Store Connect stops asking for every build.
 6. **Review notes.** Paste this:
