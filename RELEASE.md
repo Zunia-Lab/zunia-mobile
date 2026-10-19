@@ -50,10 +50,10 @@ The full EN/FR asset set (texts, screenshots from a funded demo wallet, every st
 ## 4. App Store (App Store Connect)
 
 1. **Choose the team. This blocks submission.**
-   - Apple accepts wallets only from developers enrolled **as an organization** (App Review Guideline 3.1.5(b)(i)).
-   - The project is set to team `683ATPM9Y6`, whose certificates carry a person's name ("Dan Baruka"), so it looks like an individual enrollment.
+   - The project is set to team `683ATPM9Y6`, "Dan Baruka (Personal Team)". That is a **free** team: it cannot publish to the App Store at all, and it cannot carry Associated Domains.
+   - Apple also accepts wallets only from developers enrolled **as an organization** (App Review Guideline 3.1.5(b)(i)).
    - Two ways forward:
-     - publish under an organization team, such as Zedeal Group Hub Ltd (`64JHX3M6XH`), which already holds `com.zunialab.Zunia`;
+     - publish under Zedeal Group Hub Ltd (`64JHX3M6XH`), a paid organization team that already publishes Zunia's Safari app (`com.zunialab.Zunia`);
      - or enroll Zunia Lab as an organization.
    - Then set that team in Xcode (Runner → Signing & Capabilities) and as `teamID` in `ios/ExportOptions.plist`.
 2. **Sign in to Xcode** with an Apple ID in that team: Xcode → Settings → Accounts.
@@ -65,6 +65,8 @@ The full EN/FR asset set (texts, screenshots from a funded demo wallet, every st
    flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
    ```
    Upload `build/ios/ipa/*.ipa` with Transporter, or with Xcode → Organizer → Distribute App.
+
+   The app embeds `integration_test.framework`. Flutter 3.41 still installs dev-dependency plugins on iOS. The framework links only UIKit and Foundation, with no XCTest, so App Store validation accepts it.
 5. **Questionnaires.**
    - **App Privacy:** Data Not Collected, which matches `ios/Runner/PrivacyInfo.xcprivacy`. On iOS the QR scanner uses Apple's Vision framework, not ML Kit.
    - **Age rating:** answer **Unrestricted Web Access: Yes**, because the built-in browser opens any site.
