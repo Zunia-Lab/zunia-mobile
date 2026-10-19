@@ -1,0 +1,54 @@
+Zunia est un portefeuille en auto-conservation pour l'écosystème Cosmos. Vos clés sont créées ou restaurées sur ce téléphone, scellées avec votre mot de passe et gardées ici. Il n'y a ni compte Zunia ni inscription. Zunia ne détient jamais vos fonds et ne peut pas récupérer une phrase de récupération perdue.
+
+L'application est pour l'instant en anglais.
+
+Un portefeuille pour les réseaux Cosmos
+• Plus de 220 réseaux Cosmos (mainnet) dans le catalogue intégré. Safrochain, Cosmos Hub et Osmosis sont activés au départ. Activez les autres, ou ajoutez un réseau à la main.
+• Tous vos réseaux activés dans un seul portefeuille, avec des prix indicatifs en USD, EUR, GBP, JPY ou CHF.
+• Masquez les montants d'un geste.
+• Plusieurs comptes, chacun avec sa propre phrase de récupération, déverrouillés par un seul mot de passe.
+
+Envoyer d'une chaîne à l'autre
+• Envoyez n'importe quel jeton sur la même chaîne, ou vers une autre chaîne via IBC.
+• Avant la signature, Zunia vérifie la route : le canal est ouvert et ses deux extrémités sont actives.
+• Recevez avec un QR code, ou mettez un jeton, un montant et un mémo dans une demande de paiement.
+• Un carnet d'adresses pour vos destinataires habituels.
+
+Échanger
+• Échangez des jetons via Osmosis, même depuis une autre chaîne.
+• Chaque échange fait depuis l'écran Swap comporte des frais Zunia de 0,5 %, payés dans le jeton vendu. L'écran de vérification les affiche avant la signature.
+• Si un échange parti d'une autre chaîne échoue sur Osmosis, le montant échangé vous revient. Les frais, non.
+
+Staker et voter
+• Déléguez à un validateur, retirez votre délégation et réclamez vos récompenses.
+• Lisez les propositions et votez Oui, Non, Veto ou Abstention.
+• Zunia ne prélève rien sur vos récompenses de staking.
+
+Utiliser les dApps
+• Naviguez sur les dApps dans Zunia. Chaque site demande l'accès aux réseaux dont il a besoin, et vous les approuvez un par un.
+• Associez Zunia à un site web en scannant son QR code. Les deux écrans affichent le même code à 6 chiffres, et les messages sont chiffrés de bout en bout via le relais de Zunia.
+• Chaque demande ouvre le même écran de vérification : ce qu'elle fait, les frais, et une alerte pour un site imitateur, un nouveau destinataire ou un message que Zunia ne sait pas décoder.
+
+Garder le portefeuille verrouillé
+• Déverrouillez avec votre empreinte digitale ou une autre biométrie forte, ou avec votre mot de passe.
+• Verrouillage automatique après 1, 5, 10 ou 30 minutes.
+• Activez « Password on every signature » pour confirmer chaque transaction avec votre mot de passe.
+• Captures et enregistrement d'écran sont bloqués sur les écrans de phrase, de déverrouillage et de mot de passe.
+• Une phrase copiée est effacée du presse-papiers après 30 secondes.
+• Votre phrase reste chiffrée sur ce téléphone. Ni la sauvegarde cloud ni le transfert d'appareil ne la copient.
+
+Rester informé
+• L'activité de vos réseaux, avec le détail de chaque transaction.
+• Des notifications pour les jetons reçus, les récompenses à réclamer, les fins de déblocage et les propositions. Zunia les émet lui-même quand l'app est ouverte et déverrouillée, sans serveur de push.
+• Consultez et envoyez vos NFT.
+
+Frais
+Zunia n'a ni abonnement, ni offre premium, ni jeton. Chaque transaction paie des frais de réseau à la chaîne, affichés avant la signature. Les envois, les transferts IBC, le staking et les votes ne comportent aucun frais Zunia. Seuls les échanges faits depuis l'écran Swap de Zunia comportent les frais Zunia de 0,5 %.
+
+Une phrase, navigateur et téléphone
+La même phrase de récupération donne les mêmes adresses dans l'extension de navigateur Zunia. Chaque appareil garde sa propre copie chiffrée. Rien n'est synchronisé par un serveur.
+
+Code ouvert
+Le code de l'app est public sur github.com/Zunia-Lab, sous licence Apache 2.0.
+
+Gardez votre phrase de récupération hors ligne. Zunia ne vous la demandera jamais, ni par e-mail, ni dans un chat, ni ailleurs.

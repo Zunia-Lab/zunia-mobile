@@ -1,0 +1,1 @@
+wallet,crypto,ibc,staking,clés,atom,osmo,safrochain,defi,dapp,navigateur,validateur,gouvernance,nft
