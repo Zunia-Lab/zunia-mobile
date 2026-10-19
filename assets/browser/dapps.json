@@ -13,20 +13,12 @@
       "chains": ["osmosis-1"]
     },
     {
-      "id": "astroport",
-      "name": "Astroport",
-      "url": "https://app.astroport.fi",
-      "category": "DeFi",
-      "description": "Automated market maker on Neutron and more.",
-      "chains": ["neutron-1"]
-    },
-    {
       "id": "mars",
       "name": "Mars Protocol",
       "url": "https://app.marsprotocol.io",
       "category": "DeFi",
       "description": "Lending and leveraged strategies.",
-      "chains": ["osmosis-1", "neutron-1"]
+      "chains": ["osmosis-1"]
     },
     {
       "id": "skip",
@@ -35,14 +27,6 @@
       "category": "Bridge",
       "description": "Move tokens between chains in one step.",
       "chains": []
-    },
-    {
-      "id": "stride",
-      "name": "Stride",
-      "url": "https://app.stride.zone",
-      "category": "Staking",
-      "description": "Liquid staking for Cosmos tokens.",
-      "chains": ["stride-1"]
     },
     {
       "id": "restake",
