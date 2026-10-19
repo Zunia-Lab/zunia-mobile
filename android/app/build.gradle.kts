@@ -35,8 +35,8 @@ android {
     }
 
     defaultConfig {
-        // The Play listing's package name: it can never change once published.
-        applicationId = "com.zuniawallet.zunia_mobile"
+        // The Play app is registered as this package. It cannot change.
+        applicationId = "com.zunialab.wallet"
         // local_auth / flutter_secure_storage / reown_walletkit require API 23+
         minSdk = maxOf(23, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion

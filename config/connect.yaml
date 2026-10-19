@@ -92,7 +92,7 @@ security:
   strict_namespace: true
 
 app_ids:
-  android_application_id: com.zuniawallet.zunia_mobile
+  android_application_id: com.zunialab.wallet
   ios_bundle_id: com.zuniawallet.zuniaMobile
   # Fill after Play App Signing / Apple Team setup (used in Digital Asset Links / AASA)
   android_sha256_cert_fingerprints: []

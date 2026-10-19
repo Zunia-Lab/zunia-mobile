@@ -15,7 +15,7 @@ Non-custodial multi-chain Cosmos wallet, version **0.1.0**, with the features of
 
 | Platform | Output | App id |
 |----------|--------|--------|
-| Android | APK / App Bundle | `com.zuniawallet.zunia_mobile` |
+| Android | APK / App Bundle | `com.zunialab.wallet` |
 | iOS | IPA | `com.zuniawallet.zuniaMobile` |
 
 Chain metadata comes from [zunia-chain-registry](https://github.com/Zunia-Lab/zunia-chain-registry). Token names, IBC channels, the swap fee policy and explorer links are copied from the extension by `scripts/sync-extension-data.mjs` into `assets/data/`. Visual tokens and widgets come from [zunia-ui](https://github.com/Zunia-Lab/zunia-ui) (`packages/ui-flutter`, including its per-platform layer). User documentation: [docs.zunialab.com/docs/use-wallet/mobile](https://docs.zunialab.com/docs/use-wallet/mobile/).

@@ -78,7 +78,7 @@
                 "relation": ["delegate_permission/common.handle_all_urls"],
                 "target": {
                   "namespace": "android_app",
-                  "package_name": "com.zuniawallet.zunia_mobile",
+                  "package_name": "com.zunialab.wallet",
                   "sha256_cert_fingerprints": ["<PLAY_APP_SIGNING_CERT>"]
                 }
               }]

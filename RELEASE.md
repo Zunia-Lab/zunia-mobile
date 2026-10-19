@@ -24,7 +24,7 @@ The full EN/FR asset set (texts, screenshots from a funded demo wallet, every st
 ## 3. Google Play (Play Console)
 
 1. **Create the app.**
-   - Package `com.zuniawallet.zunia_mobile`. It can never change.
+   - Package `com.zunialab.wallet`. It can never change.
    - App, free, default language English (US).
 2. **Signing.**
    - Accept Play App Signing.
@@ -50,12 +50,9 @@ The full EN/FR asset set (texts, screenshots from a funded demo wallet, every st
 ## 4. App Store (App Store Connect)
 
 1. **Choose the team. This blocks submission.**
-   - The project is set to team `683ATPM9Y6`, "Dan Baruka (Personal Team)". That is a **free** team: it cannot publish to the App Store at all, and it cannot carry Associated Domains.
-   - Apple also accepts wallets only from developers enrolled **as an organization** (App Review Guideline 3.1.5(b)(i)).
-   - Two ways forward:
-     - publish under Zedeal Group Hub Ltd (`64JHX3M6XH`), a paid organization team that already publishes Zunia's Safari app (`com.zunialab.Zunia`);
-     - or enroll Zunia Lab as an organization.
-   - Then set that team in Xcode (Runner → Signing & Capabilities) and as `teamID` in `ios/ExportOptions.plist`.
+   - Release and Profile signing, and `ios/ExportOptions.plist`, use Zedeal Group Hub Ltd (`64JHX3M6XH`), the organization that already publishes the Mac app (`com.zunialab.Zunia`). Debug still uses personal team `683ATPM9Y6` for local runs.
+   - Apple accepts wallets only from developers enrolled **as an organization** (App Review Guideline 3.1.5(b)(i)). A personal team cannot publish this app.
+   - This Mac has a Mac provisioning profile for that organization, and development certificates only. An Apple Distribution certificate for `64JHX3M6XH` is not in the login keychain yet. Xcode creates it when an Apple ID on that team is signed in (Xcode → Settings → Accounts) and the archive is exported.
 2. **Sign in to Xcode** with an Apple ID in that team: Xcode → Settings → Accounts.
 3. **Create the app.**
    - Bundle ID `com.zuniawallet.zuniaMobile`, registered in the chosen team, with the Associated Domains capability.

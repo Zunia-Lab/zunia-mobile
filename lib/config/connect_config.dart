@@ -22,7 +22,7 @@ const String kWalletUrl = 'https://zunialab.com';
 const String kWalletIconUrl =
     'https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/main/png/icons/app/zunia-icon-512.png';
 
-const String kAndroidApplicationId = 'com.zuniawallet.zunia_mobile';
+const String kAndroidApplicationId = 'com.zunialab.wallet';
 const String kIosBundleId = 'com.zuniawallet.zuniaMobile';
 
 /// Custom URL schemes registered in AndroidManifest / Info.plist.
