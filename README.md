@@ -114,7 +114,7 @@ flutter build appbundle --release
 flutter build apk --release
 
 # iOS (requires signing in Xcode)
-flutter build ipa --release
+flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 ```
 
 Artifacts:
@@ -122,6 +122,8 @@ Artifacts:
 - `build/app/outputs/bundle/release/app-release.aab`
 - `build/app/outputs/flutter-apk/app-release.apk`
 - `build/ios/ipa/*.ipa`
+
+Store submission (signing keys, console steps, listings in `fastlane/`): [RELEASE.md](RELEASE.md).
 
 ## Project layout
 

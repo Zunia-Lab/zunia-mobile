@@ -1,0 +1,23 @@
+Zunia is a self-custody wallet for the Cosmos ecosystem. Your recovery phrase is created on your phone, encrypted with your password, and never leaves the device.
+
+WHAT YOU CAN DO
+• Hold and follow tokens on 220+ Cosmos networks, including Cosmos Hub, Osmosis, Celestia, Akash and Safrochain.
+• Send and receive with QR codes, an address book and payment links.
+• Swap tokens through Osmosis routes. The route and every fee, including Zunia's 0.5% swap fee, are shown before you confirm.
+• Move tokens between chains over IBC.
+• Stake with validators, claim rewards and follow your positions.
+• Vote on governance proposals.
+• See your collectibles (NFTs) and a readable history of every transaction.
+
+CONNECT TO APPS
+• Open web apps in the built-in browser. They find Zunia the way they find a wallet extension, and every request appears as a native approval sheet.
+• Connect a website on your computer by scanning its QR code. Both screens show the same six digits, so you know you are pairing with the right site. Messages travel end-to-end encrypted, and you approve each transaction on your phone.
+
+BUILT FOR SAFETY
+• Zunia asks for your password before every signature. Face ID or your fingerprint can unlock the wallet.
+• Before you sign, Zunia decodes the transaction and shows what it does, on which network, and the fee.
+• Alerts for incoming transfers and other wallet activity.
+• No account, no tracking, no ads.
+• Open source under the Apache 2.0 license.
+
+Keep your recovery phrase offline. Anyone who has it controls your funds, and Zunia cannot recover it for you. Zunia never asks for it outside the wallet's own backup screens.

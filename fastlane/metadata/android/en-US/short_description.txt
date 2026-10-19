@@ -1,0 +1,1 @@
+Self-custody wallet for 220+ Cosmos chains: send, swap, stake, connect apps.
