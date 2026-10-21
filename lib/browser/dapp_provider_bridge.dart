@@ -611,9 +611,13 @@ class DappProviderBridge {
   }
 
   Future<Object?> _suggestChain(String origin, Object? info) async {
+    // Already known, from the registry or an earlier suggestion: nothing to
+    // ask and nothing changes, as with Keplr. Checked before the draft, which
+    // refuses registry ids: dApps suggest their own chain before every enable,
+    // and an error there stops their connect.
+    final chainId = info is Map ? '${info['chainId'] ?? ''}'.trim() : '';
+    if (chainId.isNotEmpty && (wallet.findChain(chainId) != null || wallet.isRegistryChain(chainId))) return null;
     final draft = draftFromSuggestedChain(info, isRegistryChain: wallet.isRegistryChain);
-    // Already known, from the registry or an earlier suggestion: nothing to ask.
-    if (wallet.findChain(draft.chainId) != null) return null;
     await _approve(
       approvals.enqueue(
         kind: ApprovalKind.suggestChain,

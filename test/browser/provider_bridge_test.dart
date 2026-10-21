@@ -608,10 +608,11 @@ void main() {
         call('experimentalSuggestChain', [{...info, 'chainId': 'other-1', 'rpc': 'http://rpc.example'}]),
         throwsA(_providerError('INVALID_PARAMS', 'RPC must be an https:// URL')),
       );
-      await expectLater(
-        call('experimentalSuggestChain', [{...info, 'chainId': 'cosmoshub-4'}]),
-        throwsA(_providerError('INVALID_PARAMS', 'That chain ID is already in the registry')),
-      );
+      // A registry chain is already known: the call resolves, asks nothing
+      // and changes nothing, so a Keplr dApp that suggests it carries on.
+      expect(await call('experimentalSuggestChain', [{...info, 'chainId': 'cosmoshub-4', 'rpc': 'https://rpc.other.example'}]), isNull);
+      expect(queue.pending, isEmpty);
+      expect(wallet.added.map((c) => c.chainId), ['mychain-1']);
     });
 
     test('chain infos never carry endpoints', () async {
