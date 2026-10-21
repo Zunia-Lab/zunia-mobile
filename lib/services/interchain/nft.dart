@@ -139,11 +139,15 @@ InterchainError _malformed(String chainId, String what, [Object? cause]) =>
 String messageAction(Map<String, Object?> message) =>
     message.keys.isEmpty ? 'unknown' : message.keys.first;
 
-/// Unpadded base64url of the UTF-8 JSON, which is what a wasm query path takes.
-String _jsonToBase64Url(Object? value) {
-  final bytes = utf8.encode(jsonEncode(value));
-  return base64Url.encode(bytes).replaceAll('=', '');
-}
+/// Padded base64url of the UTF-8 JSON, which is what a wasm query path takes.
+///
+/// The REST gateway decodes `query_data` with Go's standard alphabet, then the
+/// url-safe one *with* padding: unpadded, it answers HTTP 400 ("illegal base64
+/// data") whenever the JSON's length is not a multiple of three, which is two
+/// queries in three. The standard alphabet is no way out, because a `/` in it,
+/// even percent-encoded, splits the route (HTTP 501).
+String jsonToBase64Url(Object? value) =>
+    base64Url.encode(utf8.encode(jsonEncode(value)));
 
 /// Standard, padded base64 of the UTF-8 JSON, which is what a `Binary` field
 /// takes.
@@ -265,7 +269,7 @@ String smartQueryPath(String contract, Map<String, Object?> query) {
   // The address is caller data and lands in a URL path; encode it rather than
   // trusting that it is bech32. A no-op for real addresses.
   return '/cosmwasm/wasm/v1/contract/${Uri.encodeComponent(address)}'
-      '/smart/${_jsonToBase64Url(query)}';
+      '/smart/${jsonToBase64Url(query)}';
 }
 
 /// Unwrap the `{ "data": … }` envelope a smart query comes back in.
@@ -326,10 +330,11 @@ Future<Object?> smartQuery(
 /// Reclassify an LCD failure that is really the contract saying no.
 ///
 /// wasmd answers an unparseable or unsupported query with HTTP 400 carrying the
-/// serde error. `lcd.dart` treats a 400 as fatal and reports `lcdUnreachable`,
-/// which would tell the user the network is down when the truth is that this
-/// contract does not implement this query. The body text does not survive
-/// `lcd.dart`, so the message names the query instead.
+/// serde error, and a query the contract itself refuses with HTTP 500.
+/// `lcd.dart` reports both as `lcdUnreachable`, which would tell the user the
+/// network is down when the truth is that this contract does not implement
+/// this query. The 400's body does not survive `lcd.dart`, so the message names
+/// the query.
 InterchainError _asContractError(
   InterchainError error,
   String chainId,
@@ -346,6 +351,19 @@ InterchainError _asContractError(
       '$chainId: $contract rejected "${messageAction(query)}" (HTTP 400)',
       chainId: chainId,
       httpStatus: 400,
+      cause: error,
+    );
+  }
+  // wasmd's other way of saying no: HTTP 500 ending "query wasm contract
+  // failed" (an unknown variant on some versions, a missing token). Reported
+  // as unreachable, it told users a healthy node was down.
+  if (error.httpStatus == 500 &&
+      error.message.contains('wasm contract failed')) {
+    return InterchainError(
+      InterchainErrorCode.contractError,
+      '$chainId: $contract rejected "${messageAction(query)}"',
+      chainId: chainId,
+      httpStatus: 500,
       cause: error,
     );
   }

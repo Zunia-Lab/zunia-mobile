@@ -65,32 +65,46 @@ class _FakeRegistry implements ChainRegistry {
 final RegExp _smartPath =
     RegExp(r'^/cosmwasm/wasm/v1/contract/([^/]+)/smart/(.+)$');
 
-/// Answers CW721 smart queries from a handler, so the screen runs the real
-/// discovery code without a socket.
+/// Answers CW721 smart queries from a handler, and the chain's code list from
+/// [codes] (code id to its instances), so the screen runs the real discovery
+/// code and the real chain scan without a socket.
 class _StubLcd implements LcdClient {
-  _StubLcd(this._handler);
+  _StubLcd(this._handler, {this.codes = const {}});
 
   final Object? Function(String contract, String action) _handler;
+  final Map<String, List<String>> codes;
 
   @override
   final String chainId = _chainId;
 
+  /// Smart queries only, as `contract/action`.
   final List<String> actions = [];
 
   @override
   Future<Object?> getJson(String path, [LcdRequestOptions? options]) async {
+    if (path == '/cosmwasm/wasm/v1/code') {
+      return {
+        'code_infos': [
+          for (final id in codes.keys) {'code_id': id},
+        ],
+      };
+    }
+    final instances = _codeContracts.firstMatch(path);
+    if (instances != null) {
+      return {'contracts': codes[instances.group(1)] ?? const <String>[]};
+    }
     final match = _smartPath.firstMatch(path)!;
     final contract = Uri.decodeComponent(match.group(1)!);
-    final encoded = match.group(2)!;
-    final padding = (4 - encoded.length % 4) % 4;
-    final query = jsonDecode(
-      utf8.decode(base64Url.decode(encoded + ('=' * padding))),
-    ) as Map<String, Object?>;
+    final query = jsonDecode(utf8.decode(base64Url.decode(match.group(2)!)))
+        as Map<String, Object?>;
     final action = query.keys.first;
     actions.add('$contract/$action');
     return <String, Object?>{'data': _handler(contract, action)};
   }
 }
+
+final RegExp _codeContracts =
+    RegExp(r'^/cosmwasm/wasm/v1/code/([^/]+)/contracts$');
 
 void main() {
   Future<void> pump(
@@ -189,6 +203,48 @@ void main() {
     expect(lcd.actions, contains('$_collection/tokens'));
     expect(find.text('Nothing in the collections checked'), findsOneWidget);
     expect(find.textContaining('queried 1 collection'), findsOneWidget);
+  });
+
+  testWidgets('a collection on chain is found with nothing pasted',
+      (tester) async {
+    // The reported case: a Safrochain wallet holding one token in a CW721 the
+    // wallet had never been told about.
+    final lcd = _StubLcd(
+      (contract, action) => switch (action) {
+            'tokens' => const {'tokens': ['dr-1']},
+            'all_nft_info' => const {
+                'access': {'owner': _owner, 'approvals': <Object?>[]},
+                'info': {'token_uri': null, 'extension': {'name': 'Reputation'}},
+              },
+            _ => const {'name': 'Dyma Reputation', 'symbol': 'DREP'},
+          },
+      codes: const {
+        '9': [_collection],
+      },
+    );
+    await pump(tester, lcd: lcd, prefs: const {'zunia.prefs.liveReads': true});
+
+    expect(lcd.actions, contains('$_collection/tokens'));
+    expect(find.text('Reputation'), findsOneWidget);
+    expect(find.textContaining('chain scan'), findsOneWidget);
+    expect(find.text('Nothing was checked'), findsNothing);
+  });
+
+  testWidgets('a scan that finds no collection says what it checked',
+      (tester) async {
+    final lcd = _StubLcd(
+      (contract, action) => throw InterchainError(
+          InterchainErrorCode.contractError, 'not a cw721'),
+      codes: const {
+        '3': [_collection],
+      },
+    );
+    await pump(tester, lcd: lcd, prefs: const {'zunia.prefs.liveReads': true});
+
+    expect(find.text('Nothing in the collections checked'), findsOneWidget);
+    expect(find.textContaining('newest 1 contract code'), findsOneWidget);
+    // A non-CW721 contract answering "no" is the scan working, not a failure.
+    expect(find.text('A collection could not be read'), findsNothing);
   });
 
   testWidgets('a chain without CosmWasm explains itself instead of showing an '

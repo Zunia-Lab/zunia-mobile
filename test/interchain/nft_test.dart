@@ -259,18 +259,50 @@ void main() {
    * ------------------------------------------------------------------ */
 
   group('smart queries', () {
-    test('smartQueryPath encodes the query as unpadded base64url', () {
+    test('smartQueryPath encodes the query as padded base64url', () {
       final path = smartQueryPath(collection, {'num_tokens': <String, Object?>{}});
       final match = _smartPath.firstMatch(path);
       expect(match, isNotNull);
       expect(match!.group(1), collection);
-      expect(match.group(2), isNot(contains('=')),
-          reason: 'base64url in a path must not be padded');
-      final encoded = match.group(2)!;
-      final padding = (4 - encoded.length % 4) % 4;
-      expect(
-        utf8.decode(base64Url.decode(encoded + ('=' * padding))),
-        '{"num_tokens":{}}',
+      // The REST gateway decodes standard base64, then padded base64url, and
+      // nothing else: unpadded it answers HTTP 400 for two queries in three.
+      expect(match.group(2), 'eyJudW1fdG9rZW5zIjp7fX0=');
+      expect(match.group(2), isNot(matches(RegExp(r'[+/]'))));
+      expect(utf8.decode(base64Url.decode(match.group(2)!)), '{"num_tokens":{}}');
+    });
+
+    test('jsonToBase64Url pads, and never emits + or /', () {
+      expect(jsonToBase64Url({'contract_info': <String, Object?>{}}),
+          'eyJjb250cmFjdF9pbmZvIjp7fX0=');
+      expect(jsonToBase64Url({'nft_info': {'token_id': 't?>>>>>'}}),
+          'eyJuZnRfaW5mbyI6eyJ0b2tlbl9pZCI6InQ_Pj4-Pj4ifX0=');
+    });
+
+    test("a contract's own HTTP 500 rejection is a contractError, not an outage",
+        () async {
+      final stub = _StubLcd((_) => throw InterchainError(
+            InterchainErrorCode.lcdUnreachable,
+            'safrochain-1: https://lcd answered HTTP 500: Error parsing into '
+            'type cw721::msg::QueryMsg: query wasm contract failed',
+            httpStatus: 500,
+          ));
+      await expectLater(
+        listOwnedTokenIds(_ctx(stub), collection, owner),
+        throwsA(isA<InterchainError>()
+            .having((e) => e.code, 'code', InterchainErrorCode.contractError)
+            .having((e) => e.httpStatus, 'httpStatus', 500)),
+      );
+    });
+
+    test('a bare HTTP 500 is still the node failing', () async {
+      final stub = _StubLcd((_) => throw InterchainError(
+            InterchainErrorCode.lcdUnreachable,
+            'safrochain-1: https://lcd answered HTTP 500',
+            httpStatus: 500,
+          ));
+      await expectLater(
+        listOwnedTokenIds(_ctx(stub), collection, owner),
+        _throwsCode(InterchainErrorCode.lcdUnreachable),
       );
     });
 

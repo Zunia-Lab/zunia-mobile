@@ -13,6 +13,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +22,7 @@ import 'package:zunia_mobile/config/nft_config.dart';
 import 'package:zunia_mobile/services/interchain/channels.dart';
 import 'package:zunia_mobile/services/interchain/lcd.dart';
 import 'package:zunia_mobile/services/interchain/nft.dart';
+import 'package:zunia_mobile/services/interchain/nft_code_scan.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/services/nft_metadata_fetcher.dart';
 import 'package:zunia_mobile/state/interchain.dart';
@@ -389,6 +391,8 @@ class NftGalleryState {
     this.issues = const [],
     this.sources = const [],
     this.contractsQueried = 0,
+    this.codesScanned = 0,
+    this.fromChainScan = false,
     this.complete = false,
     this.limitation,
     this.detailBudgetSpent = false,
@@ -411,6 +415,14 @@ class NftGalleryState {
   /// How many contracts were actually asked. `empty` with a zero here would be
   /// a lie, which is why [NftGalleryStatus.nothingToQuery] exists.
   final int contractsQueried;
+
+  /// Wasm codes whose CW721 verdict the chain scan used. Zero means the scan
+  /// did not ask the chain anything.
+  final int codesScanned;
+
+  /// True when a collection on screen came from the chain scan rather than
+  /// the shipped list or the user.
+  final bool fromChainScan;
 
   /// True only when an indexer answered without error.
   final bool complete;
@@ -437,6 +449,8 @@ class NftGalleryState {
     List<NftDiscoveryIssue>? issues,
     List<NftDiscoverySource>? sources,
     int? contractsQueried,
+    int? codesScanned,
+    bool? fromChainScan,
     bool? complete,
     String? limitation,
     bool? detailBudgetSpent,
@@ -449,6 +463,8 @@ class NftGalleryState {
         issues: issues ?? this.issues,
         sources: sources ?? this.sources,
         contractsQueried: contractsQueried ?? this.contractsQueried,
+        codesScanned: codesScanned ?? this.codesScanned,
+        fromChainScan: fromChainScan ?? this.fromChainScan,
         complete: complete ?? this.complete,
         limitation: limitation ?? this.limitation,
         detailBudgetSpent: detailBudgetSpent ?? this.detailBudgetSpent,
@@ -469,7 +485,8 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
   /// Guards against two overlapping runs writing each other's results.
   int _run = 0;
 
-  Future<void> refresh() async {
+  /// [force] rescans the chain's code list instead of reusing a recent scan.
+  Future<void> refresh({bool force = false}) async {
     final run = ++_run;
     final chainId = state.chainId;
     state = state.copyWith(status: NftGalleryStatus.loading, reason: null);
@@ -533,18 +550,6 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
 
     final known = kNftKnownCollections[chainId] ?? const <String>[];
     final user = _ref.read(nftUserCollectionsProvider).forChain(chainId);
-    if (known.isEmpty && user.isEmpty && !kNftIndexerAvailable) {
-      state = state.copyWith(
-        status: NftGalleryStatus.nothingToQuery,
-        reason: 'Nothing was queried. CosmWasm has no chain-wide index of NFTs '
-            'by owner, this build ships no collection list for $chainName, and '
-            'no indexer is configured — so without a contract address there is '
-            'no question to ask. Paste a collection address to check one.',
-        items: const [],
-        contractsQueried: 0,
-      );
-      return;
-    }
 
     final ctx = await _ref.read(nftContextProvider(chainId).future);
     if (run != _run) return;
@@ -557,14 +562,62 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
       return;
     }
 
+    // No index of NFTs by owner exists on CosmWasm, so the chain's own code
+    // list stands in for one: the newest CW721 contracts become candidates.
+    // A failed scan is shown as an issue; the shipped and pasted contracts are
+    // still read.
+    var scan = const NftCodeScanResult();
+    NftDiscoveryIssue? scanIssue;
+    try {
+      scan = await NftCodeScanner(ctx, store: const SharedPrefsNftCodeScanStore())
+          .scan(owner, force: force);
+    } on InterchainError catch (error) {
+      if (error.code == InterchainErrorCode.aborted) return;
+      scanIssue = NftDiscoveryIssue(
+        contractAddress: null,
+        message: 'Chain scan: ${error.message}',
+      );
+    }
+    if (run != _run) return;
+
+    final shipped = known.toSet();
+    final scanned = scan.contracts.where((a) => !shipped.contains(a)).toList();
+    if (known.isEmpty && user.isEmpty && scanned.isEmpty) {
+      final codes = scan.codesScanned;
+      final noList = scanIssue == null
+          ? 'the chain lists no contract code to check'
+          : 'the chain\'s contract list could not be read';
+      state = state.copyWith(
+        status: codes > 0
+            ? NftGalleryStatus.empty
+            : NftGalleryStatus.nothingToQuery,
+        reason: codes > 0
+            ? 'Zunia checked the newest $codes contract '
+                '${codes == 1 ? 'code' : 'codes'} on $chainName and none is an '
+                'NFT collection. Paste a collection address to check one it '
+                'did not reach.'
+            : 'Nothing was queried. CosmWasm has no chain-wide index of NFTs '
+                'by owner, this build ships no collection list for $chainName, '
+                'and $noList. Paste a collection address to check one.',
+        items: const [],
+        issues: [?scanIssue],
+        contractsQueried: 0,
+        codesScanned: codes,
+        fromChainScan: false,
+      );
+      return;
+    }
+
     NftDiscoveryResult discovery;
     try {
       discovery = await discoverNfts(
         ctx,
         owner,
         options: NftDiscoveryOptions(
-          knownContracts: known,
+          knownContracts: [...known, ...scanned],
           userContracts: user,
+          maxContracts:
+              max(defaultMaxDiscoveryContracts, known.length + scanned.length),
           request: const LcdRequestOptions(cacheTtl: Duration(seconds: 30)),
         ),
       );
@@ -579,7 +632,25 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
     }
     if (run != _run) return;
 
-    final queried = <String>{...known, ...user}.length;
+    final queried = <String>{...known, ...scanned, ...user}.length;
+    final scannedSet = scanned.toSet();
+    final userSet = user.toSet();
+    bool notCw721(NftDiscoveryIssue issue) =>
+        issue.message.startsWith('${InterchainErrorCode.contractError.name}:') ||
+        issue.message.startsWith('${InterchainErrorCode.malformedResponse.name}:');
+    final issues = <NftDiscoveryIssue>[
+      ?scanIssue,
+      for (final issue in discovery.issues)
+        // A scanned contract that refuses a CW721 query answered "not a
+        // collection"; that is the scan being wide, not a failure to show.
+        if (!(scannedSet.contains(issue.contractAddress) &&
+            !userSet.contains(issue.contractAddress) &&
+            notCw721(issue)))
+          issue,
+    ];
+    final fromChainScan = discovery.holdings.any((h) =>
+        h.source == NftDiscoverySource.known &&
+        scannedSet.contains(h.contractAddress));
     final items = <NftGalleryItem>[
       for (final holding in discovery.holdings)
         for (final tokenId in holding.tokenIds)
@@ -601,9 +672,11 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
               'know about are not covered.'
           : null,
       items: items,
-      issues: discovery.issues,
+      issues: issues,
       sources: discovery.sources,
       contractsQueried: queried,
+      codesScanned: scan.codesScanned,
+      fromChainScan: fromChainScan,
       complete: discovery.complete,
       limitation: discovery.limitation,
       detailBudgetSpent: items.length > kNftTokenDetailBudget,

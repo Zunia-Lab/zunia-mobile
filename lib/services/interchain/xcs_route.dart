@@ -120,7 +120,8 @@ String xcsRouteQueryPath(String router, String input, String output) {
   final query = jsonEncode({
     'get_route': {'input_denom': input, 'output_denom': output},
   });
-  final encoded = base64Url.encode(utf8.encode(query)).replaceAll('=', '');
+  // Padded: the gateway rejects unpadded base64url (see jsonToBase64Url in nft.dart).
+  final encoded = base64Url.encode(utf8.encode(query));
   return '/cosmwasm/wasm/v1/contract/${Uri.encodeComponent(router)}/smart/$encoded';
 }
 
