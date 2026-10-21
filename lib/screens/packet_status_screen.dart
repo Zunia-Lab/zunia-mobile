@@ -15,12 +15,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/crypto/amino_tx.dart';
-import 'package:zunia_mobile/screens/dapp_browser_screen.dart';
+import 'package:zunia_mobile/activity/bundled_links.dart';
 import 'package:zunia_mobile/services/interchain/tracking.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/services/wallet_tx_service.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/widgets/portfolio_feedback.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// How often the chains are asked again while the transfer is in flight.
@@ -180,14 +181,7 @@ class _PacketStatusScreenState extends ConsumerState<PacketStatusScreen> {
                 hops: _hops(trace),
                 sourceTxHash: widget.sourceTxHash,
                 sourceChainId: widget.plan.sourceChainId,
-                failure: switch (trace?.failure) {
-                  PacketFailureKind.timeout => ZuniaPacketFailureKind.timeout,
-                  PacketFailureKind.ackError => ZuniaPacketFailureKind.ackError,
-                  PacketFailureKind.stalled => ZuniaPacketFailureKind.stalled,
-                  PacketFailureKind.swapDeliveryFailed =>
-                    ZuniaPacketFailureKind.swapDeliveryFailed,
-                  null => null,
-                },
+                failure: trackerFailure(trace?.failure),
                 recoveryReady: recovery?.ready ?? false,
                 recoverDisabledReason: recovery == null || recovery.ready
                     ? null
@@ -198,9 +192,7 @@ class _PacketStatusScreenState extends ConsumerState<PacketStatusScreen> {
                     : null,
                 recoverLabel: _recovering ? 'Recovering…' : 'Recover funds',
                 txUrl: _txUrl,
-                onOpenTx: (url) => unawaited(
-                  DappBrowserScreen.open(context, url: url, title: 'Explorer'),
-                ),
+                onOpenTx: (url) => unawaited(openExternal(context, url)),
                 onCopyTxHash: (hash) =>
                     unawaited(Clipboard.setData(ClipboardData(text: hash))),
                 loading: _loading && trace == null,
@@ -252,34 +244,26 @@ class _PacketStatusScreenState extends ConsumerState<PacketStatusScreen> {
     );
   }
 
-  /// No explorer is configured for these chains, so no link is offered.
-  ///
-  /// Returning null makes the tracker render the hash as selectable text. A
-  /// made-up explorer domain would be worse than no link.
-  String? _txUrl(String chainId, String txHash) => null;
+  /// The explorer the chain registry names for the chain, or null: the
+  /// tracker then renders the hash as selectable text. A made-up explorer
+  /// domain would be worse than no link.
+  String? _txUrl(String chainId, String txHash) => explorerTxUrl(chainId, txHash);
 
-  List<ZuniaPacketTrackerHop> _hops(RouteTrace? trace) {
-    if (trace == null) {
-      // Before the first read: show the planned hops as pending rather than an
-      // empty panel, so the user sees the shape of what they signed.
-      final registry = ref.read(interchainRegistryProvider);
-      return [
-        for (final hop in widget.plan.hops)
-          ZuniaPacketTrackerHop(
-            chainId: hop.chainId,
-            chainName: registry.get(hop.chainId)?.chainName,
-            counterpartyChainId: hop.counterpartyChainId,
-            counterpartyChainName: hop.counterpartyChainId == null
-                ? null
-                : registry.get(hop.counterpartyChainId!)?.chainName,
-            channelId: hop.channelId.isEmpty ? null : hop.channelId,
-            status: ZuniaPacketHopStatus.pending,
-          ),
-      ];
-    }
-    final registry = ref.read(interchainRegistryProvider);
+  List<ZuniaPacketTrackerHop> _hops(RouteTrace? trace) =>
+      packetTrackerHops(widget.plan, trace, ref.read(interchainRegistryProvider));
+}
+
+/// A route's hops as the tracker draws them. Before the first read the
+/// planned hops show as pending, so the user sees the shape of what they
+/// signed rather than an empty panel.
+List<ZuniaPacketTrackerHop> packetTrackerHops(
+  RoutePlan plan,
+  RouteTrace? trace,
+  ChainRegistry registry,
+) {
+  if (trace == null) {
     return [
-      for (final hop in trace.hops)
+      for (final hop in plan.hops)
         ZuniaPacketTrackerHop(
           chainId: hop.chainId,
           chainName: registry.get(hop.chainId)?.chainName,
@@ -288,24 +272,46 @@ class _PacketStatusScreenState extends ConsumerState<PacketStatusScreen> {
               ? null
               : registry.get(hop.counterpartyChainId!)?.chainName,
           channelId: hop.channelId.isEmpty ? null : hop.channelId,
-          port: hop.port.isEmpty ? 'transfer' : hop.port,
-          sequence: hop.sequence,
-          sendTxHash: hop.sendTxHash,
-          receiveTxHash: hop.receiveTxHash,
-          error: hop.error,
-          // The engine decides this against a per-hop-kind threshold; the UI
-          // only renders it.
-          stalled: hop.stalled,
-          status: switch (hop.status) {
-            PacketStatus.pending => ZuniaPacketHopStatus.pending,
-            PacketStatus.relayed => ZuniaPacketHopStatus.relayed,
-            PacketStatus.received => ZuniaPacketHopStatus.received,
-            PacketStatus.acknowledged => ZuniaPacketHopStatus.acknowledged,
-            PacketStatus.timeout => ZuniaPacketHopStatus.timeout,
-            PacketStatus.failed => ZuniaPacketHopStatus.failed,
-            PacketStatus.unknown => ZuniaPacketHopStatus.unknown,
-          },
+          status: ZuniaPacketHopStatus.pending,
         ),
     ];
   }
+  return [
+    for (final hop in trace.hops)
+      ZuniaPacketTrackerHop(
+        chainId: hop.chainId,
+        chainName: registry.get(hop.chainId)?.chainName,
+        counterpartyChainId: hop.counterpartyChainId,
+        counterpartyChainName: hop.counterpartyChainId == null
+            ? null
+            : registry.get(hop.counterpartyChainId!)?.chainName,
+        channelId: hop.channelId.isEmpty ? null : hop.channelId,
+        port: hop.port.isEmpty ? 'transfer' : hop.port,
+        sequence: hop.sequence,
+        sendTxHash: hop.sendTxHash,
+        receiveTxHash: hop.receiveTxHash,
+        error: hop.error,
+        // The engine decides this against a per-hop-kind threshold; the UI
+        // only renders it.
+        stalled: hop.stalled,
+        status: switch (hop.status) {
+          PacketStatus.pending => ZuniaPacketHopStatus.pending,
+          PacketStatus.relayed => ZuniaPacketHopStatus.relayed,
+          PacketStatus.received => ZuniaPacketHopStatus.received,
+          PacketStatus.acknowledged => ZuniaPacketHopStatus.acknowledged,
+          PacketStatus.timeout => ZuniaPacketHopStatus.timeout,
+          PacketStatus.failed => ZuniaPacketHopStatus.failed,
+          PacketStatus.unknown => ZuniaPacketHopStatus.unknown,
+        },
+      ),
+  ];
 }
+
+/// The engine's failure kind as the tracker names it.
+ZuniaPacketFailureKind? trackerFailure(PacketFailureKind? failure) => switch (failure) {
+      PacketFailureKind.timeout => ZuniaPacketFailureKind.timeout,
+      PacketFailureKind.ackError => ZuniaPacketFailureKind.ackError,
+      PacketFailureKind.stalled => ZuniaPacketFailureKind.stalled,
+      PacketFailureKind.swapDeliveryFailed => ZuniaPacketFailureKind.swapDeliveryFailed,
+      null => null,
+    };

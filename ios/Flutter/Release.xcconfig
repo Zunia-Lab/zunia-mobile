@@ -1,4 +1,5 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"
 #include "Generated.xcconfig"
-LIBRARY_SEARCH_PATHS = $(inherited) "$(PROJECT_DIR)/Frameworks/ZuniaCore.xcframework/ios-arm64-simulator" "$(PROJECT_DIR)/Frameworks/ZuniaCore.xcframework/ios-arm64"
+LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(inherited) "$(PROJECT_DIR)/Frameworks/ZuniaCore.xcframework/ios-arm64"
+LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(inherited) "$(PROJECT_DIR)/Frameworks/ZuniaCore.xcframework/ios-arm64-simulator"
 OTHER_LDFLAGS = $(inherited) -lzunia_ffi

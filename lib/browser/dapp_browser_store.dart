@@ -1,4 +1,6 @@
-/// Origin-scoped dApp browser permissions and recent / favorite URLs.
+/// Bookmarks and recently visited pages of the in-app browser. Local to the
+/// device, never synced. Which sites may see which chains lives in
+/// `site_grants.dart`.
 library;
 
 import 'dart:convert';
@@ -27,6 +29,8 @@ class BrowserBookmark {
   final String title;
   final DateTime visitedAt;
 
+  String get host => Uri.tryParse(url)?.host ?? url;
+
   Map<String, dynamic> toJson() => {
         'url': url,
         'title': title,
@@ -38,107 +42,85 @@ class DappBrowserStore {
   DappBrowserStore._();
   static final instance = DappBrowserStore._();
 
-  static const _kPerms = 'zunia.browser.permissions';
   static const _kRecents = 'zunia.browser.recents';
-  static const _kFavorites = 'zunia.browser.favorites';
 
-  /// origin → enabled chain ids
-  Future<Map<String, List<String>>> permissions() async {
+  /// The key predates the word "bookmarks" in the UI; kept so nothing saved is lost.
+  static const _kBookmarks = 'zunia.browser.favorites';
+
+  static const _maxRecents = 24;
+
+  Future<List<BrowserBookmark>> _read(String key) async {
     final store = await SharedPreferences.getInstance();
-    final raw = store.getString(_kPerms);
-    if (raw == null || raw.isEmpty) return {};
-    final map = jsonDecode(raw) as Map<String, dynamic>;
-    return map.map(
-      (k, v) => MapEntry(k, (v as List<dynamic>).cast<String>()),
-    );
-  }
-
-  Future<bool> isEnabled(String origin, String chainId) async {
-    final perms = await permissions();
-    final chains = perms[origin];
-    return chains != null && chains.contains(chainId);
-  }
-
-  Future<void> grant(String origin, List<String> chainIds) async {
-    final store = await SharedPreferences.getInstance();
-    final perms = await permissions();
-    final existing = {...(perms[origin] ?? const <String>[])};
-    existing.addAll(chainIds);
-    perms[origin] = existing.toList();
-    await store.setString(_kPerms, jsonEncode(perms));
-  }
-
-  Future<void> revoke(String origin) async {
-    final store = await SharedPreferences.getInstance();
-    final perms = await permissions();
-    perms.remove(origin);
-    await store.setString(_kPerms, jsonEncode(perms));
-  }
-
-  Future<List<BrowserBookmark>> recents() async {
-    final store = await SharedPreferences.getInstance();
-    final raw = store.getString(_kRecents);
+    final raw = store.getString(key);
     if (raw == null || raw.isEmpty) return <BrowserBookmark>[];
-    return (jsonDecode(raw) as List<dynamic>)
-        .map((e) => BrowserBookmark.fromJson(e as Map<String, dynamic>))
-        .toList();
+    try {
+      return (jsonDecode(raw) as List<dynamic>)
+          .whereType<Map<String, dynamic>>()
+          .map(BrowserBookmark.fromJson)
+          .toList();
+    } on FormatException {
+      return <BrowserBookmark>[];
+    }
   }
 
-  Future<void> touchRecent({required String url, required String title}) async {
+  Future<void> _write(String key, List<BrowserBookmark> rows) async {
     final store = await SharedPreferences.getInstance();
+    await store.setString(key, jsonEncode(rows.map((e) => e.toJson()).toList()));
+  }
+
+  Future<List<BrowserBookmark>> recents() => _read(_kRecents);
+
+  /// Only https pages are remembered: an http or data: page is never a place
+  /// to come back to with a wallet.
+  Future<void> touchRecent({required String url, required String title}) async {
+    if (Uri.tryParse(url)?.scheme != 'https') return;
     final list = await recents();
     list.removeWhere((b) => b.url == url);
-    list.insert(
-      0,
-      BrowserBookmark(url: url, title: title, visitedAt: DateTime.now()),
-    );
-    final trimmed = list.take(24).toList();
-    await store.setString(
-      _kRecents,
-      jsonEncode(trimmed.map((e) => e.toJson()).toList()),
-    );
+    list.insert(0, BrowserBookmark(url: url, title: title, visitedAt: DateTime.now()));
+    await _write(_kRecents, list.take(_maxRecents).toList());
   }
 
-  Future<List<BrowserBookmark>> favorites() async {
-    final store = await SharedPreferences.getInstance();
-    final raw = store.getString(_kFavorites);
-    if (raw == null || raw.isEmpty) return const [];
-    return (jsonDecode(raw) as List<dynamic>)
-        .map((e) => BrowserBookmark.fromJson(e as Map<String, dynamic>))
-        .toList();
+  Future<void> removeRecent(String url) async {
+    final list = await recents();
+    list.removeWhere((b) => b.url == url);
+    await _write(_kRecents, list);
   }
 
-  Future<bool> isFavorite(String url) async {
-    final list = await favorites();
-    return list.any((b) => b.url == url);
-  }
+  Future<void> clearRecents() => _write(_kRecents, const []);
 
-  Future<void> toggleFavorite({
-    required String url,
-    required String title,
-  }) async {
-    final store = await SharedPreferences.getInstance();
-    final list = await favorites();
-    final idx = list.indexWhere((b) => b.url == url);
-    if (idx >= 0) {
-      list.removeAt(idx);
+  Future<List<BrowserBookmark>> bookmarks() => _read(_kBookmarks);
+
+  Future<bool> isBookmarked(String url) async =>
+      (await bookmarks()).any((b) => b.url == url);
+
+  /// Adds the page, or removes it when it is already saved. Returns whether it
+  /// is saved now.
+  Future<bool> toggleBookmark({required String url, required String title}) async {
+    final list = await bookmarks();
+    final index = list.indexWhere((b) => b.url == url);
+    if (index >= 0) {
+      list.removeAt(index);
     } else {
-      list.insert(
-        0,
-        BrowserBookmark(url: url, title: title, visitedAt: DateTime.now()),
-      );
+      list.insert(0, BrowserBookmark(url: url, title: title, visitedAt: DateTime.now()));
     }
-    await store.setString(
-      _kFavorites,
-      jsonEncode(list.map((e) => e.toJson()).toList()),
-    );
+    await _write(_kBookmarks, list);
+    return index < 0;
+  }
+
+  Future<void> removeBookmark(String url) async {
+    final list = await bookmarks();
+    list.removeWhere((b) => b.url == url);
+    await _write(_kBookmarks, list);
   }
 }
 
+/// `scheme://host[:port]` as a browser computes an origin, or the input when
+/// it has none.
 String browserOriginOf(Uri uri) {
   if (uri.hasScheme && uri.host.isNotEmpty) {
+    final host = uri.host.contains(':') ? '[${uri.host}]' : uri.host.toLowerCase();
     final port = uri.hasPort ? ':${uri.port}' : '';
-    return '${uri.scheme}://${uri.host}$port';
+    return '${uri.scheme}://$host$port';
   }
   return uri.toString();
 }

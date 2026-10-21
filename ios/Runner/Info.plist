@@ -59,9 +59,9 @@
 		<string>wc</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Zunia uses the camera to scan WalletConnect and payment QR codes.</string>
+	<string>Zunia uses the camera to scan QR codes: connect codes from websites, wallet addresses and payment requests.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Zunia uses Face ID to unlock your wallet after you enter your password.</string>
+	<string>Zunia uses Face ID to unlock your wallet and to confirm signatures when you turn that on. Your password always works too.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -90,8 +90,6 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<key>UIUserInterfaceStyle</key>
-	<string>Dark</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -99,15 +97,6 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 </dict>
 </plist>

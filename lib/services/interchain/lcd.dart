@@ -203,6 +203,21 @@ class HttpLcdClient implements LcdClient {
               endpoint: base,
               httpStatus: response.status,
             );
+            // A contract's own rejection (wasmd wraps it as "…: query wasm
+            // contract failed", HTTP 500) is the same on every retry and every
+            // endpoint. The node's sentence is kept so `smartQuery` can tell it
+            // from a node that is failing.
+            if (response.status == 500 &&
+                response.body.contains('wasm contract failed')) {
+              throw InterchainError(
+                InterchainErrorCode.lcdUnreachable,
+                '$chainId: $base answered HTTP 500: '
+                '${_serverMessage(response.body)}',
+                chainId: chainId,
+                endpoint: base,
+                httpStatus: 500,
+              );
+            }
             // 4xx is the node's considered answer: the route does not exist or
             // the id is unknown. Retrying cannot change it, and callers read
             // the status to tell "not found" from "unreachable".
@@ -251,6 +266,19 @@ class HttpLcdClient implements LcdClient {
           '$chainId: every REST endpoint failed',
           chainId: chainId,
         );
+  }
+
+  /// The gRPC gateway's `message`, or the raw body when it is not that shape.
+  static String _serverMessage(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map && decoded['message'] is String) {
+        return decoded['message'] as String;
+      }
+    } on FormatException {
+      // Not JSON: the body itself is the best description there is.
+    }
+    return body.length > 300 ? body.substring(0, 300) : body;
   }
 
   void _remember(String key, Object? value, Duration ttl) {

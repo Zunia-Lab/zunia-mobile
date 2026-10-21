@@ -1,0 +1,1 @@
+cosmos,wallet,crypto,atom,osmosis,staking,ibc,swap,defi,celestia,akash,safrochain,web3,nft,dapp

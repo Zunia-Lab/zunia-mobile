@@ -120,9 +120,9 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
     super.dispose();
   }
 
-  void _refresh() {
+  void _refresh({bool force = false}) {
     if (!mounted) return;
-    ref.read(nftGalleryProvider(widget.chainId).notifier).refresh();
+    ref.read(nftGalleryProvider(widget.chainId).notifier).refresh(force: force);
   }
 
   Future<void> _addCollection() async {
@@ -260,6 +260,22 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
             style: zuniaMono(fontSize: 10.5, height: 1.5, color: s.fgMuted),
           ),
         ],
+        if (state.status == NftGalleryStatus.loaded ||
+            state.status == NftGalleryStatus.empty ||
+            state.status == NftGalleryStatus.nothingToQuery) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            // A scan is reused for hours; a collection minted since then
+            // should not need the user to wait that out.
+            child: ZuniaButton(
+              label: 'Scan the chain again',
+              size: ZuniaButtonSize.sm,
+              variant: ZuniaButtonVariant.secondary,
+              onPressed: () => _refresh(force: true),
+            ),
+          ),
+        ],
         if (state.limitation != null &&
             state.status != NftGalleryStatus.unsupported &&
             state.status != NftGalleryStatus.nothingToQuery) ...[
@@ -298,9 +314,9 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
         const ZuniaSectionLabel('Add a collection'),
         const SizedBox(height: 8),
         Text(
-          'CosmWasm has no chain-wide list of NFTs by owner, so Zunia can only '
-          'ask contracts it has an address for. Paste one and it is checked '
-          'for this address and remembered.',
+          'CosmWasm has no chain-wide list of NFTs by owner, so Zunia scans the '
+          'newest contracts on this chain for collections. Paste one it did '
+          'not reach and it is checked for this address and remembered.',
           style: zuniaSans(fontSize: 12, height: 1.5, color: s.fgMuted),
         ),
         const SizedBox(height: 10),
@@ -400,14 +416,21 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
       };
 
   String _coverageLine(NftGalleryState state) {
+    final count = '${state.contractsQueried} '
+        '${state.contractsQueried == 1 ? 'collection' : 'collections'}';
     final where = state.complete
         ? 'An indexer answered, so this covers every collection it knows of.'
-        : 'Read from ${state.contractsQueried} '
-            '${state.contractsQueried == 1 ? 'collection' : 'collections'} '
-            'Zunia knows about.';
+        : state.codesScanned > 0
+            ? 'Read from $count found among the newest ${state.codesScanned} '
+                'contract codes on chain or added by you.'
+            : 'Read from $count Zunia knows about.';
+    final shipped =
+        (kNftKnownCollections[widget.chainId] ?? const <String>[]).isNotEmpty;
     final paths = state.sources
         .map((source) => switch (source) {
-              NftDiscoverySource.known => 'shipped list',
+              NftDiscoverySource.known => state.fromChainScan
+                  ? (shipped ? 'shipped list, chain scan' : 'chain scan')
+                  : 'shipped list',
               NftDiscoverySource.user => 'addresses you added',
               NftDiscoverySource.indexer => 'indexer',
             })

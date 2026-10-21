@@ -1,31 +1,25 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:zunia_mobile/connect/wallet_signer.dart';
+import 'package:zunia_mobile/notifications/notifications.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
 import 'package:zunia_mobile/screens/address_book_screen.dart';
 import 'package:zunia_mobile/screens/bridge_screen.dart';
+import 'package:zunia_mobile/screens/connect_inbox.dart';
 import 'package:zunia_mobile/screens/governance_screen.dart';
-import 'package:zunia_mobile/screens/native_request_sheets.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/notifications_screen.dart';
-import 'package:zunia_mobile/screens/dapp_browser_screen.dart';
-import 'package:zunia_mobile/screens/dapp_connect_sheet.dart';
-import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
-import 'package:zunia_mobile/screens/rewards_screen.dart';
+import 'package:zunia_mobile/screens/pair_device.dart';
 import 'package:zunia_mobile/screens/sessions_screen.dart';
 import 'package:zunia_mobile/screens/settings_screen.dart';
 import 'package:zunia_mobile/screens/tabs/browser_tab.dart';
 import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
 import 'package:zunia_mobile/screens/tabs/home_tab.dart';
-import 'package:zunia_mobile/screens/tabs/missions_tab.dart';
 import 'package:zunia_mobile/screens/tabs/swap_tab.dart';
-import 'package:zunia_mobile/services/deep_link_handler.dart';
-import 'package:zunia_mobile/services/native_connect_service.dart';
-import 'package:zunia_mobile/services/wallet_connect_service.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -40,124 +34,82 @@ class RootShell extends ConsumerStatefulWidget {
 }
 
 class _RootShellState extends ConsumerState<RootShell> {
+  // Browser sits in the middle: it is where a site meets the wallet.
   static const _tabs = [
-    (id: 'home', label: 'Home', icon: Icons.home_outlined),
-    (id: 'earn', label: 'Earn', icon: Icons.diamond_outlined),
-    (id: 'swap', label: 'Swap', icon: Icons.swap_horiz),
-    (id: 'missions', label: 'Missions', icon: Icons.star_outline),
-    (id: 'browser', label: 'Browser', icon: Icons.travel_explore_outlined),
+    ZuniaTabItem(
+      id: 'home',
+      label: 'Wallet',
+      icon: Icons.account_balance_wallet_outlined,
+      activeIcon: Icons.account_balance_wallet,
+      cupertinoIcon: CupertinoIcons.house,
+      cupertinoActiveIcon: CupertinoIcons.house_fill,
+    ),
+    ZuniaTabItem(
+      id: 'swap',
+      label: 'Swap',
+      icon: Icons.swap_horiz_rounded,
+      cupertinoIcon: CupertinoIcons.arrow_right_arrow_left,
+    ),
+    ZuniaTabItem(
+      id: 'browser',
+      label: 'Browser',
+      icon: Icons.explore_outlined,
+      activeIcon: Icons.explore,
+      cupertinoIcon: CupertinoIcons.compass,
+      cupertinoActiveIcon: CupertinoIcons.compass_fill,
+    ),
+    ZuniaTabItem(
+      id: 'earn',
+      label: 'Earn',
+      icon: Icons.savings_outlined,
+      activeIcon: Icons.savings,
+      cupertinoIcon: CupertinoIcons.graph_circle,
+      cupertinoActiveIcon: CupertinoIcons.graph_circle_fill,
+    ),
+    ZuniaTabItem(
+      id: 'gov',
+      label: 'Gov',
+      icon: Icons.how_to_vote_outlined,
+      activeIcon: Icons.how_to_vote,
+      cupertinoIcon: CupertinoIcons.checkmark_seal,
+      cupertinoActiveIcon: CupertinoIcons.checkmark_seal_fill,
+    ),
   ];
 
   String _tab = 'home';
-  final _subs = <StreamSubscription<dynamic>>[];
-  ProviderSubscription<int?>? _accountSub;
-  bool _sheetOpen = false;
+  StreamSubscription<dynamic>? _noticeTaps;
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(_listenConnect);
+    Future.microtask(_listenNotices);
   }
 
-  void _listenConnect() {
+  /// The notice engine watches chains while the wallet is unlocked; a tapped
+  /// device notification, or a notice asking for a tab, lands here. Requests
+  /// from sites are ConnectInbox's.
+  void _listenNotices() {
     if (!mounted) return;
-    final native = ref.read(nativeConnectProvider);
-    final wc = ref.read(walletConnectProvider);
-    final deep = ref.read(deepLinkHandlerProvider);
-
-    _subs.add(native.changes.listen((_) => _showNextNativeRequest()));
-    _subs.add(native.notices.listen(_onNativeNotice));
-    _subs.add(wc.sessionProposals.listen(_onWcProposal));
-    _subs.add(deep.links.listen(_onDeepLink));
-    _accountSub = ref.listenManual<int?>(
-      walletProvider.select((w) => w.active?.index),
-      _onAccountChanged,
-    );
-    // Requests that arrived while the wallet was locked.
-    _showNextNativeRequest();
-  }
-
-  Future<void> _onDeepLink(Uri uri) async {
-    if (!mounted) return;
-    final dappUrl = DeepLinkHandler.parseDappUrl(uri);
-    if (dappUrl == null || dappUrl.isEmpty) return;
-    await DappBrowserScreen.open(context, url: dappUrl);
-  }
-
-  void _onNativeNotice(NativeConnectNotice notice) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(notice.message)),
-    );
-  }
-
-  /// Shows what sites asked for, one sheet at a time, oldest first.
-  Future<void> _showNextNativeRequest() async {
-    if (!mounted || _sheetOpen) return;
-    final native = ref.read(nativeConnectProvider);
-    final pending = native.pendingRequests;
-    if (pending.isEmpty) return;
-    final request = pending.first;
-    _sheetOpen = true;
-    try {
-      switch (request) {
-        case NativeConnectRequest():
-          await showNativeConnectSheet(context, request: request);
-          // Dismissed without a choice: that is a no.
-          if (native.isPending(request)) await native.rejectConnect(request);
-        case NativeSignRequest():
-          await showNativeSignSheet(context, request: request);
-          if (native.isPending(request)) await native.rejectSign(request);
+    _noticeTaps = ref.read(noticeEngineProvider.notifier).taps.listen((target) {
+      if (!mounted) return;
+      if (target == null) {
+        _open(const NotificationsScreen());
+      } else {
+        openNoticeTarget(context, ref, target);
       }
-    } catch (e) {
-      debugPrint('native request: $e');
-    } finally {
-      _sheetOpen = false;
-    }
-    unawaited(_showNextNativeRequest());
-  }
-
-  void _onAccountChanged(int? previous, int? next) {
-    if (next == null || previous == null || previous == next) return;
-    final phrase = ref.read(phraseProvider);
-    if (phrase == null) return;
-    final name = ref.read(walletProvider).active?.name;
-    unawaited(
-      ref.read(nativeConnectProvider).switchAccount(
-            accountIndex: next,
-            accountsFor: (chainIds) => connectAccountsFor(
-              phrase: phrase,
-              accountIndex: next,
-              chainIds: chainIds,
-              accountName: name,
-            ),
-          ),
-    );
-  }
-
-  Future<void> _onWcProposal(WcSessionProposal proposal) async {
-    if (!mounted || _sheetOpen) return;
-    _sheetOpen = true;
-    try {
-      await showDappConnectSheet(
-        context,
-        offer: DappConnectOffer.fromWcProposal(proposal),
-      );
-    } finally {
-      _sheetOpen = false;
-    }
-    unawaited(_showNextNativeRequest());
+    });
+    ref.listenManual<String?>(noticeTabRequestProvider, (_, tab) {
+      if (tab == null || !mounted) return;
+      setState(() => _tab = tab);
+      ref.read(noticeTabRequestProvider.notifier).state = null;
+    });
   }
 
   @override
   void dispose() {
-    for (final sub in _subs) {
-      sub.cancel();
-    }
-    _accountSub?.close();
+    _noticeTaps?.cancel();
     super.dispose();
   }
-
   void _open(Widget screen) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
@@ -167,41 +119,32 @@ class _RootShellState extends ConsumerState<RootShell> {
     _open(screen);
   }
 
+  // Requests from connected sites and apps show over whichever tab is open.
   @override
   Widget build(BuildContext context) {
+    // Start the notice engine before any header reads its unread count.
+    ref.listen(noticeEngineProvider, (_, _) {});
+    return ConnectInbox(child: _shell(context));
+  }
+
+  Widget _shell(BuildContext context) {
     final index = _tabs.indexWhere((t) => t.id == _tab);
-    final s = ZuniaSemanticsExt.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(gradient: s.screenGradient),
+    return ZuniaBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
+        // What the tab bar shows is not repeated here.
         endDrawer: _Drawer(
-          ecosystemActive: _tab == 'browser',
-          onEcosystem: () {
-            Navigator.of(context).pop();
-            setState(() => _tab = 'browser');
-          },
+          onActivity: () => _fromDrawer(const ActivityScreen()),
           onNetworks: () => _fromDrawer(const NetworksScreen()),
           onBridge: () => _fromDrawer(const BridgeScreen()),
           onCollectibles: () => _fromDrawer(const NftCollectionScreen()),
-          onGovernance: () => _fromDrawer(const GovernanceScreen()),
-          onActivity: () => _fromDrawer(const ActivityScreen()),
-          onRewards: () => _fromDrawer(const RewardsScreen()),
+          onMissions: () => _fromDrawer(const _MissionsPage()),
           onPair: () {
-            final nav = Navigator.of(context);
-            nav.pop();
-            nav
-                .push<String>(
-              MaterialPageRoute(builder: (_) => const QrScannerScreen()),
-            )
-                .then((code) {
-              if (!context.mounted || code == null || code.isEmpty) return;
-              handleScannedCode(context, ref, code);
-            });
+            Navigator.of(context).pop();
+            unawaited(openPairDevice(context, ref));
           },
           onSessions: () => _fromDrawer(const SessionsScreen()),
           onAddressBook: () => _fromDrawer(const AddressBookScreen()),
-          onNotifications: () => _fromDrawer(const NotificationsScreen()),
           onSettings: () => _fromDrawer(const SettingsScreen()),
           onHelp: () {
             Navigator.of(context).pop();
@@ -270,66 +213,23 @@ class _RootShellState extends ConsumerState<RootShell> {
             );
           },
         ),
+        bottomNavigationBar: ZuniaNavigationBar(
+          items: _tabs,
+          value: _tab,
+          onChanged: (v) => setState(() => _tab = v),
+        ),
         body: SafeArea(
           bottom: false,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // Floating dock height ≈ pill + outer padding + home indicator.
-              // Keep this ahead of content so cards never peek under the bar.
-              final dockClearance =
-                  78.0 + MediaQuery.viewPaddingOf(context).bottom;
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: Padding(
-                      padding: EdgeInsets.only(bottom: dockClearance),
-                      child: IndexedStack(
-                        index: index < 0 ? 0 : index,
-                        children: const [
-                          HomeTab(),
-                          EarnTab(),
-                          SwapTab(),
-                          MissionsTab(),
-                          BrowserTab(),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: IgnorePointer(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              s.bg.withValues(alpha: 0),
-                              s.bg.withValues(alpha: 0.72),
-                              s.bg,
-                            ],
-                            stops: const [0, 0.45, 1],
-                          ),
-                        ),
-                        child: SizedBox(height: dockClearance + 12),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: ZuniaTabBar(
-                      items: _tabs,
-                      value: _tab,
-                      onChanged: (v) => setState(() => _tab = v),
-                    ),
-                  ),
-                ],
-              );
-            },
+          child: IndexedStack(
+            index: index < 0 ? 0 : index,
+            children: [
+              // Home's Swap and Stake actions switch tabs here.
+              HomeTab(onOpenTab: (id) => setState(() => _tab = id)),
+              const SwapTab(),
+              const BrowserTab(),
+              const EarnTab(),
+              const GovernanceScreen(embedded: true),
+            ],
           ),
         ),
       ),
@@ -339,34 +239,26 @@ class _RootShellState extends ConsumerState<RootShell> {
 
 class _Drawer extends ConsumerWidget {
   const _Drawer({
-    required this.ecosystemActive,
-    required this.onEcosystem,
+    required this.onActivity,
     required this.onNetworks,
     required this.onBridge,
     required this.onCollectibles,
-    required this.onGovernance,
-    required this.onActivity,
-    required this.onRewards,
+    required this.onMissions,
     required this.onPair,
     required this.onSessions,
     required this.onAddressBook,
-    required this.onNotifications,
     required this.onSettings,
     required this.onHelp,
   });
 
-  final bool ecosystemActive;
-  final VoidCallback onEcosystem;
+  final VoidCallback onActivity;
   final VoidCallback onNetworks;
   final VoidCallback onBridge;
   final VoidCallback onCollectibles;
-  final VoidCallback onGovernance;
-  final VoidCallback onActivity;
-  final VoidCallback onRewards;
+  final VoidCallback onMissions;
   final VoidCallback onPair;
   final VoidCallback onSessions;
   final VoidCallback onAddressBook;
-  final VoidCallback onNotifications;
   final VoidCallback onSettings;
   final VoidCallback onHelp;
 
@@ -376,28 +268,20 @@ class _Drawer extends ConsumerWidget {
     final wallet = ref.watch(walletProvider);
     final address = ref.watch(primaryAddressProvider);
     final prefs = ref.watch(preferencesProvider);
-    final accounts = ref.watch(chainAccountsProvider);
     final wc = ref.watch(walletConnectProvider);
     final native = ref.watch(nativeConnectProvider);
     final sessionCount =
         wc.activeSessions.length + native.activeSessions.length;
-
+    // The Discover list's own length, so the count follows its data file.
     return ZuniaDrawerPanel(
       children: [
         Row(
           children: [
-            Container(
-              width: 34,
-              height: 34,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: s.accentGradient,
-              ),
-              child: Text(
-                wallet.active?.initial ?? 'W',
-                style: zuniaMono(fontSize: 12, color: s.accentFg),
-              ),
+            // The same orb as the Wallet header, so the account looks the
+            // same wherever it appears.
+            ZuniaWalletAvatar(
+              seed: wallet.active?.id ?? wallet.active?.name ?? 'Wallet',
+              size: 38,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -428,53 +312,13 @@ class _Drawer extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                s.accent.withValues(alpha: 0.24),
-                s.info.withValues(alpha: 0.1),
-              ],
-            ),
-          ),
-          child: Row(
-            children: [
-              Text(
-                'TOTAL',
-                style: zuniaMono(
-                  fontSize: 9,
-                  letterSpacing: 1.2,
-                  color: s.fgMuted,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                prefs.hideAmounts
-                    ? '••••'
-                    : '${accounts.length} chain${accounts.length == 1 ? '' : 's'}',
-                style: zuniaSans(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: s.fg,
-                ),
-              ),
-            ],
-          ),
-        ),
         const SizedBox(height: 14),
         const ZuniaSectionLabel('Explore'),
         const SizedBox(height: 6),
         ZuniaDrawerRow(
-          icon: Icons.apps_outlined,
-          label: 'Ecosystem',
-          active: ecosystemActive,
-          meta: '${_appsCount()}',
-          onTap: onEcosystem,
+          icon: Icons.receipt_long_outlined,
+          label: 'Activity',
+          onTap: onActivity,
         ),
         ZuniaDrawerRow(
           icon: Icons.hub_outlined,
@@ -495,19 +339,10 @@ class _Drawer extends ConsumerWidget {
           onTap: onCollectibles,
         ),
         ZuniaDrawerRow(
-          icon: Icons.how_to_vote_outlined,
-          label: 'Governance',
-          onTap: onGovernance,
-        ),
-        ZuniaDrawerRow(
-          icon: Icons.history,
-          label: 'Activity',
-          onTap: onActivity,
-        ),
-        ZuniaDrawerRow(
-          icon: Icons.savings_outlined,
-          label: 'Rewards',
-          onTap: onRewards,
+          icon: Icons.star_outline,
+          label: 'Missions',
+          meta: 'Soon',
+          onTap: onMissions,
         ),
         const SizedBox(height: 14),
         const ZuniaSectionLabel('Wallet'),
@@ -529,12 +364,6 @@ class _Drawer extends ConsumerWidget {
           onTap: onAddressBook,
         ),
         ZuniaDrawerRow(
-          icon: Icons.notifications_none,
-          label: 'Notifications',
-          badge: prefs.alerts,
-          onTap: onNotifications,
-        ),
-        ZuniaDrawerRow(
           icon: Icons.settings_outlined,
           label: 'Settings & security',
           onTap: onSettings,
@@ -545,17 +374,75 @@ class _Drawer extends ConsumerWidget {
           onTap: onHelp,
         ),
         const SizedBox(height: 18),
+        // Dark, Light and Auto, as the extension's drawer offers them; Auto
+        // used to show as Dark here, so the drawer misreported the setting.
         ZuniaSegmented<ThemeMode>(
-          value: prefs.themeMode == ThemeMode.system
-              ? ThemeMode.dark
-              : prefs.themeMode,
+          value: prefs.themeMode,
           onChanged: (mode) =>
               ref.read(preferencesProvider.notifier).setTheme(mode),
-          options: const {ThemeMode.dark: 'Dark', ThemeMode.light: 'Light'},
+          options: const {
+            ThemeMode.dark: 'Dark',
+            ThemeMode.light: 'Light',
+            ThemeMode.system: 'Auto',
+          },
         ),
       ],
     );
   }
+}
 
-  static int _appsCount() => 6;
+/// Missions are not live yet: the page says so instead of showing a
+/// checklist that earns nothing.
+class _MissionsPage extends StatelessWidget {
+  const _MissionsPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    return Scaffold(
+      backgroundColor: zuniaGroundTop(context),
+      body: SafeArea(
+        child: ZuniaScreenScaffold(
+          title: 'Missions',
+          onBack: () => Navigator.of(context).pop(),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: s.accentGradient,
+                    ),
+                    child: const Icon(Icons.star_rounded, size: 36, color: Colors.white),
+                  ),
+                  const SizedBox(height: 22),
+                  Text(
+                    'Coming soon',
+                    style: zuniaSans(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.6,
+                      color: s.fg,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Missions will reward you for exploring the Cosmos with Zunia. '
+                    'They are not live yet.',
+                    textAlign: TextAlign.center,
+                    style: zuniaSans(fontSize: 15, height: 1.5, color: s.fgMuted),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

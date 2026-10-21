@@ -1,0 +1,1 @@
+One self-custody wallet for every Cosmos chain. Send, swap, stake, vote and connect web apps by QR code, with each signature approved on your phone.

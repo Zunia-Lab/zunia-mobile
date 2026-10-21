@@ -10,7 +10,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:zunia_mobile/activity/activity_model.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
+
+
+export 'package:zunia_mobile/activity/activity_model.dart'
+    show ActivityItem, ActivityKind, TxDetailInfo;
 
 const _defaultTimeout = Duration(seconds: 9);
 
@@ -81,12 +86,59 @@ class ChainReadFailure {
       };
 }
 
+/// One non-zero bank balance, as the chain spelled it.
+///
+/// The name, ticker, logo and decimals come from the token identity
+/// (`lib/tokens/token_identity.dart`) at display time, so a voucher the
+/// wallet proves later is renamed without reading the chain again. The chain's
+/// own bank metadata is kept only for what an identity cannot know: the
+/// decimals and a name of a token nothing lists.
+@immutable
+class HeldToken {
+  const HeldToken({
+    required this.denom,
+    required this.amount,
+    this.metadataDecimals,
+    this.metadataName,
+  });
+
+  /// The exact bank denom, never case-folded.
+  final String denom;
+
+  /// Base units, a non-negative integer string.
+  final String amount;
+  final int? metadataDecimals;
+  final String? metadataName;
+
+  HeldToken withMetadata(int? decimals, String? name) => HeldToken(
+        denom: denom,
+        amount: amount,
+        metadataDecimals: decimals,
+        metadataName: name,
+      );
+}
+
+/// A read that produced no answer, with the reason.
+class ChainReadException implements Exception {
+  const ChainReadException(this.failure);
+  final ChainReadFailure failure;
+  @override
+  String toString() => failure.message;
+}
+
 /// A balance that was actually read.
 ///
 /// There is deliberately no `empty` instance and no failure case on this type:
-/// a [ChainBalance] exists only when the endpoint answered, so every number on
-/// it is a fact about the account. A read that failed is a
-/// [BalanceUnavailable], never a ChainBalance full of zeros.
+/// a [ChainBalance] exists only when the bank endpoint answered, so its
+/// available amount and [tokens] are facts about the account. A read that
+/// failed is a [BalanceUnavailable], never a ChainBalance full of zeros.
+///
+/// Staking and distribution are separate endpoints, and some chains do not
+/// serve them (Noble has no distribution module). A leg whose route the node
+/// does not serve (404, 405, 501) is a real zero: there is nothing to stake
+/// there. A leg that failed for any other reason leaves [stakingKnown] or
+/// [rewardsKnown] false, and screens show "—" for it instead of the '0' the
+/// field carries for older callers.
 @immutable
 class ChainBalance {
   const ChainBalance({
@@ -95,11 +147,14 @@ class ChainBalance {
     required this.staked,
     required this.rewards,
     this.otherDenoms = const [],
+    this.tokens = const [],
+    this.stakingKnown = true,
+    this.rewardsKnown = true,
   });
 
   final String chainId;
 
-  /// All amounts are base units (uatom, usaf, …).
+  /// All amounts are base units (uatom, usaf, …) of the chain's staking coin.
   final String available;
   final String staked;
   final String rewards;
@@ -110,6 +165,26 @@ class ChainBalance {
   /// means the chain entry names the wrong denom, instead of implying the
   /// account is empty.
   final List<String> otherDenoms;
+
+  /// Every non-zero bank balance: native, IBC, factory and anything else.
+  final List<HeldToken> tokens;
+
+  /// False when the delegations endpoint failed: [staked] is not a fact.
+  final bool stakingKnown;
+
+  /// False when the rewards endpoint failed: [rewards] is not a fact.
+  final bool rewardsKnown;
+
+  ChainBalance withTokens(List<HeldToken> next) => ChainBalance(
+        chainId: chainId,
+        available: available,
+        staked: staked,
+        rewards: rewards,
+        otherDenoms: otherDenoms,
+        tokens: next,
+        stakingKnown: stakingKnown,
+        rewardsKnown: rewardsKnown,
+      );
 }
 
 /// Outcome of one balance read: a value, or the reason there is none.
@@ -214,33 +289,6 @@ class ProposalInfo {
 
   /// Normalised 0-1 shares, absent when the chain reports no votes yet.
   final ({double yes, double no, double veto, double abstain})? tally;
-}
-
-enum ActivityKind { sent, received, ibc, swap, staking, claim, governance, other }
-
-@immutable
-class ActivityItem {
-  const ActivityItem({
-    required this.chainId,
-    required this.hash,
-    required this.kind,
-    required this.title,
-    required this.subtitle,
-    required this.timestamp,
-    required this.success,
-    this.amount,
-  });
-
-  final String chainId;
-  final String hash;
-  final ActivityKind kind;
-  final String title;
-  final String subtitle;
-  final DateTime timestamp;
-  final bool success;
-
-  /// Signed base-unit delta when it could be worked out.
-  final String? amount;
 }
 
 class ChainClient {
@@ -366,13 +414,69 @@ class ChainClient {
         ),
       );
 
-  /// Spendable, bonded and claimable in one round trip set.
+  /// A bank page this large keeps a factory-heavy account to a few requests.
+  static const int bankPageLimit = 200;
+
+  /// Past this many pages the account is not read whole, and a denom absent
+  /// from what was read cannot be ruled out.
+  static const int bankMaxPages = 10;
+
+  /// HTTP answers meaning "this node does not serve the route": a module the
+  /// chain does not run (Noble has no distribution), or a proxy that hides it.
+  static const Set<int> _routeAbsent = {404, 405, 501};
+
+  static bool _absentRoute(ChainReadFailure? failure) =>
+      failure != null &&
+      failure.kind == ChainReadFailureKind.badStatus &&
+      _routeAbsent.contains(failure.statusCode);
+
+  /// Every bank coin the address holds, following pagination.
   ///
-  /// All three legs have to answer. A [ChainBalance] carries three numbers the
-  /// screens print as fact, so tolerating a failed leg would mean inventing a
-  /// zero for it - the false claim this whole type exists to prevent. When one
-  /// leg fails the caller gets [BalanceUnavailable] with the reason, and the
-  /// screens say the balance is unknown rather than that it is zero.
+  /// Returns the rows and whether the walk ended on the last page. A failed
+  /// page fails the read: a partial list must not be reported as the account.
+  Future<({List<Object?> rows, bool complete, ChainReadFailure? failure})> _bankRows(
+    String rest,
+    String address,
+  ) async {
+    final rows = <Object?>[];
+    String? key;
+    for (var page = 0; page < bankMaxPages; page++) {
+      final params = <String, String>{'pagination.limit': '$bankPageLimit'};
+      if (key != null) params['pagination.key'] = key;
+      final query = params.entries
+          .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+          .join('&');
+      final read = await _readJson('$rest/cosmos/bank/v1beta1/balances/$address?$query');
+      final failure = read.failure;
+      if (failure != null) return (rows: rows, complete: false, failure: failure);
+      final balances = read.json?['balances'];
+      if (balances is! List) {
+        return (
+          rows: rows,
+          complete: false,
+          failure: const ChainReadFailure(
+            ChainReadFailureKind.malformedBody,
+            detail: 'balances is not a list',
+          ),
+        );
+      }
+      rows.addAll(balances);
+      final pagination = read.json?['pagination'];
+      final next = pagination is Map ? (pagination['next_key'] ?? pagination['nextKey']) : null;
+      if (next is! String || next.isEmpty) {
+        return (rows: rows, complete: true, failure: null);
+      }
+      key = next;
+    }
+    return (rows: rows, complete: false, failure: null);
+  }
+
+  /// Spendable (every denom), bonded and claimable for one address.
+  ///
+  /// The bank leg has to answer: it is the account. Staking and rewards are
+  /// read beside it; a leg the node does not serve counts as zero, and a leg
+  /// that failed otherwise is marked unknown on the result rather than failing
+  /// every token the bank read did return (see [ChainBalance.stakingKnown]).
   Future<BalanceRead> balance(ChainEntry chain, String address) async {
     if (!enabled) {
       return const BalanceUnavailable(
@@ -387,83 +491,83 @@ class ChainClient {
     }
     final denom = chain.coinMinimalDenom;
 
-    final reads = await Future.wait([
-      // A high page limit because the denom we want can sit behind the default
-      // 100-row page on an account holding many IBC vouchers, and "not on the
-      // page I read" must never be reported as zero.
-      _readJson(
-        '$rest/cosmos/bank/v1beta1/balances/$address?pagination.limit=1000',
-      ),
+    final bankFuture = _bankRows(rest, address);
+    final legs = await Future.wait([
       _readJson('$rest/cosmos/staking/v1beta1/delegations/$address'),
       _readJson('$rest/cosmos/distribution/v1beta1/delegators/$address/rewards'),
     ]);
-    for (final read in reads) {
-      final failure = read.failure;
-      if (failure != null) return BalanceUnavailable(failure);
-    }
-
-    final rows = reads[0].json?['balances'];
-    if (rows is! List) return _malformed('balances is not a list');
+    final bank = await bankFuture;
+    final bankFailure = bank.failure;
+    if (bankFailure != null) return BalanceUnavailable(bankFailure);
 
     var available = BigInt.zero;
     var matchedDenom = false;
     final otherDenoms = <String>[];
-    for (final row in rows) {
+    final held = <String, BigInt>{};
+    for (final row in bank.rows) {
       if (row is! Map) return _malformed('balances row is not an object');
       final rowDenom = row['denom'];
-      if (rowDenom != denom) {
-        if (rowDenom is String && rowDenom.isNotEmpty) {
-          otherDenoms.add(rowDenom);
-        }
-        continue;
-      }
+      if (rowDenom is! String || rowDenom.isEmpty) continue;
       final amount = _amountOf(row['amount']);
       if (amount == null) return _malformed('balance amount is not a number');
+      if (amount > BigInt.zero) held[rowDenom] = (held[rowDenom] ?? BigInt.zero) + amount;
+      if (rowDenom != denom) {
+        otherDenoms.add(rowDenom);
+        continue;
+      }
       matchedDenom = true;
       available += amount;
     }
-    if (!matchedDenom) {
-      // Nothing for this denom on the page we read. That is a real zero only
-      // if there was no further page.
-      final nextKey = (reads[0].json?['pagination'] as Map?)?['next_key'];
-      if (nextKey is String && nextKey.isNotEmpty) {
-        return const BalanceUnavailable(
-          ChainReadFailure(ChainReadFailureKind.incompletePage),
-        );
-      }
+    if (!matchedDenom && !bank.complete) {
+      // Nothing for this denom in the pages read, and there were more.
+      return const BalanceUnavailable(
+        ChainReadFailure(ChainReadFailureKind.incompletePage),
+      );
     }
 
     var staked = BigInt.zero;
-    final delegations = reads[1].json?['delegation_responses'];
-    // An LCD may omit an empty collection entirely; a present non-list means
-    // the body is not the schema we asked for.
-    if (delegations is List) {
-      for (final row in delegations) {
-        if (row is! Map) return _malformed('delegation row is not an object');
-        final balance = row['balance'];
-        if (balance is! Map || balance['denom'] != denom) continue;
-        final amount = _amountOf(balance['amount']);
-        if (amount == null) {
-          return _malformed('delegation amount is not a number');
+    var stakingKnown = true;
+    final stakingFailure = legs[0].failure;
+    if (stakingFailure != null) {
+      stakingKnown = _absentRoute(stakingFailure);
+    } else {
+      final delegations = legs[0].json?['delegation_responses'];
+      // An LCD may omit an empty collection entirely; a present non-list means
+      // the body is not the schema we asked for.
+      if (delegations is List) {
+        for (final row in delegations) {
+          if (row is! Map) return _malformed('delegation row is not an object');
+          final balance = row['balance'];
+          if (balance is! Map || balance['denom'] != denom) continue;
+          final amount = _amountOf(balance['amount']);
+          if (amount == null) {
+            return _malformed('delegation amount is not a number');
+          }
+          staked += amount;
         }
-        staked += amount;
+      } else if (delegations != null) {
+        return _malformed('delegation_responses is not a list');
       }
-    } else if (delegations != null) {
-      return _malformed('delegation_responses is not a list');
     }
 
     var rewards = BigInt.zero;
-    final totals = reads[2].json?['total'];
-    if (totals is List) {
-      for (final row in totals) {
-        if (row is! Map) return _malformed('rewards row is not an object');
-        if (row['denom'] != denom) continue;
-        final amount = _amountOf(row['amount']);
-        if (amount == null) return _malformed('reward amount is not a number');
-        rewards += amount;
+    var rewardsKnown = true;
+    final rewardsFailure = legs[1].failure;
+    if (rewardsFailure != null) {
+      rewardsKnown = _absentRoute(rewardsFailure);
+    } else {
+      final totals = legs[1].json?['total'];
+      if (totals is List) {
+        for (final row in totals) {
+          if (row is! Map) return _malformed('rewards row is not an object');
+          if (row['denom'] != denom) continue;
+          final amount = _amountOf(row['amount']);
+          if (amount == null) return _malformed('reward amount is not a number');
+          rewards += amount;
+        }
+      } else if (totals != null) {
+        return _malformed('rewards total is not a list');
       }
-    } else if (totals != null) {
-      return _malformed('rewards total is not a list');
     }
 
     return BalanceLoaded(
@@ -473,7 +577,80 @@ class ChainClient {
         staked: staked.toString(),
         rewards: rewards.toString(),
         otherDenoms: List.unmodifiable(otherDenoms),
+        tokens: List.unmodifiable([
+          for (final MapEntry(:key, :value) in held.entries)
+            HeldToken(denom: key, amount: value.toString()),
+        ]),
+        stakingKnown: stakingKnown,
+        rewardsKnown: rewardsKnown,
       ),
+    );
+  }
+
+  /// What a chain's bank metadata says on purpose about [denom]: decimals and
+  /// a name, never a ticker. Null when the node has none or could not be
+  /// asked. ibc-go's generated voucher records name nothing and say exponent
+  /// 0, so they yield nothing either.
+  Future<({int? decimals, String? name})?> bankMetadata(ChainEntry chain, String denom) async {
+    final rest = _restOf(chain);
+    if (rest == null || !enabled) return null;
+    final urls = [
+      if (denom.contains('/'))
+        '$rest/cosmos/bank/v1beta1/denoms_metadata_by_query_string?denom=${Uri.encodeQueryComponent(denom)}',
+      '$rest/cosmos/bank/v1beta1/denoms_metadata/${Uri.encodeComponent(denom)}',
+    ];
+    for (final url in urls) {
+      final read = await _readJson(url);
+      final failure = read.failure;
+      if (failure != null) {
+        if (failure.kind == ChainReadFailureKind.badStatus &&
+            const {400, 404, 405, 501}.contains(failure.statusCode)) {
+          continue;
+        }
+        return null;
+      }
+      return metadataFacts(read.json, denom);
+    }
+    return null;
+  }
+
+  /// The decimals and name a metadata record states, or null when the record
+  /// is another denom's (a proxy that mixed up its answers).
+  static ({int? decimals, String? name})? metadataFacts(Object? body, String denom) {
+    final meta = body is Map ? body['metadata'] : null;
+    if (meta is! Map) return (decimals: null, name: null);
+    final base = '${meta['base'] ?? ''}'.trim();
+    if (base.isNotEmpty && base != denom) return null;
+    final display = '${meta['display'] ?? ''}'.trim().toLowerCase();
+    final name = '${meta['name'] ?? ''}'.trim();
+    final description = '${meta['description'] ?? ''}'.trim();
+    final generated = RegExp('^IBC token from ', caseSensitive: false).hasMatch(description) ||
+        RegExp(r'\bIBC token$', caseSensitive: false).hasMatch(name);
+    int? exponentOf(Object? value) {
+      final parsed = value is num ? value.toInt() : int.tryParse('${value ?? ''}');
+      return parsed != null && parsed > 0 && parsed <= 30 ? parsed : null;
+    }
+
+    int? decimals;
+    final units = meta['denom_units'];
+    if (units is List && display.isNotEmpty) {
+      for (final unit in units) {
+        if (unit is! Map) continue;
+        final aliases = unit['aliases'] is List ? unit['aliases'] as List : const [];
+        final names = [unit['denom'], ...aliases].map((alias) => '${alias ?? ''}'.trim().toLowerCase());
+        if (!names.contains(display)) continue;
+        decimals = exponentOf(unit['exponent']);
+        break;
+      }
+    }
+    final clean = name.replaceAll(RegExp(r'[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return (
+      decimals: decimals ?? exponentOf(meta['decimals']),
+      name: generated || clean.isEmpty
+          ? null
+          : (clean.runes.length > 64 ? '${String.fromCharCodes(clean.runes.take(63))}…' : clean),
     );
   }
 
@@ -690,156 +867,103 @@ class ChainClient {
     ];
   }
 
-  static ({ActivityKind kind, String title, String subtitle, String? amount})
-      _describe(Map<dynamic, dynamic> message, String address, String denom) {
-    final type = (message['@type'] ?? '').toString();
-    final short = type.split('.').last;
+  /// Which spelling of the tx search each chain answered: SDK 0.50 `query`,
+  /// older `events`. Remembered so a chain is asked the one it reads.
+  static final Map<String, String> _searchStyles = {};
 
-    if (type.endsWith('MsgSend')) {
-      final from = message['from_address']?.toString() ?? '';
-      final to = message['to_address']?.toString() ?? '';
-      final amount = _sumDenom(message['amount'], denom);
-      final outgoing = from == address;
-      return (
-        kind: outgoing ? ActivityKind.sent : ActivityKind.received,
-        title: outgoing ? 'Sent' : 'Received',
-        subtitle: outgoing ? 'to $to' : 'from $from',
-        amount: outgoing ? '-$amount' : amount,
+  Future<({List<Object?>? rows, ChainReadFailure? failure})> _searchTxs(
+    String rest,
+    String chainId,
+    String condition,
+    int limit,
+  ) async {
+    final known = _searchStyles[chainId];
+    final styles = known == 'events' ? const ['events', 'query'] : const ['query', 'events'];
+    ChainReadFailure? last;
+    for (final style in styles) {
+      final read = await _readJson(
+        '$rest/cosmos/tx/v1beta1/txs?$style=${Uri.encodeQueryComponent(condition)}'
+        '&order_by=ORDER_BY_DESC&limit=$limit',
       );
+      final failure = read.failure;
+      if (failure != null) {
+        last = failure;
+        continue;
+      }
+      final rows = read.json?['tx_responses'];
+      _searchStyles[chainId] = style;
+      return (rows: rows is List ? rows : const <Object?>[], failure: null);
     }
-    if (type.endsWith('MsgTransfer')) {
-      final token = message['token'];
-      return (
-        kind: ActivityKind.ibc,
-        title: 'IBC transfer',
-        subtitle: message['source_channel']?.toString() ?? 'ibc',
-        amount: token is Map && token['denom'] == denom
-            ? '-${token['amount']}'
-            : null,
-      );
-    }
-    if (type.contains('MsgSwap') ||
-        type.endsWith('MsgSwapExactAmountIn') ||
-        type.endsWith('MsgSwapExactAmountOut') ||
-        type.endsWith('MsgJoinPool') ||
-        type.endsWith('MsgExitPool')) {
-      return (
-        kind: ActivityKind.swap,
-        title: short.replaceFirst(RegExp(r'^Msg'), ''),
-        subtitle: type,
-        amount: null,
-      );
-    }
-    if (type.endsWith('MsgDelegate') || type.endsWith('MsgBeginRedelegate')) {
-      final amount = message['amount'];
-      return (
-        kind: ActivityKind.staking,
-        title: type.endsWith('MsgDelegate') ? 'Delegate' : 'Redelegate',
-        subtitle: (message['validator_address'] ??
-                message['validator_dst_address'] ??
-                '')
-            .toString(),
-        amount: amount is Map ? amount['amount']?.toString() : null,
-      );
-    }
-    if (type.endsWith('MsgUndelegate')) {
-      final amount = message['amount'];
-      return (
-        kind: ActivityKind.staking,
-        title: 'Undelegate',
-        subtitle: message['validator_address']?.toString() ?? '',
-        amount: amount is Map ? amount['amount']?.toString() : null,
-      );
-    }
-    if (type.endsWith('MsgWithdrawDelegatorReward')) {
-      return (
-        kind: ActivityKind.claim,
-        title: 'Claim rewards',
-        subtitle: message['validator_address']?.toString() ?? '',
-        amount: null,
-      );
-    }
-    if (type.endsWith('MsgVote')) {
-      return (
-        kind: ActivityKind.governance,
-        title: 'Vote on #${message['proposal_id'] ?? ''}',
-        subtitle: (message['option'] ?? '')
-            .toString()
-            .replaceAll('VOTE_OPTION_', '')
-            .toLowerCase(),
-        amount: null,
-      );
-    }
-    return (
-      kind: ActivityKind.other,
-      title: short,
-      subtitle: type,
-      amount: null,
-    );
+    return (rows: null, failure: last);
   }
 
-  /// Recent transactions touching an address, newest first. Limited to what the
-  /// node still has indexed.
+  /// Recent transactions touching an address, newest first. Uses the LCD tx
+  /// search, so it only covers what the node still has indexed.
+  ///
+  /// Throws [ChainReadException] when neither search could be read, so a
+  /// screen can tell a chain it could not reach from a chain with no history.
   Future<List<ActivityItem>> activity(
     ChainEntry chain,
     String address, {
     int limit = 15,
+    Map<String, String> feeRecipients = const {},
   }) async {
     final rest = _restOf(chain);
-    if (rest == null) return const [];
-    final denom = chain.coinMinimalDenom;
-
-    // Newer SDKs take `query`, older ones `events`; ask both, both directions.
-    final queries = [
-      "message.sender='$address'",
-      "transfer.recipient='$address'",
-    ];
-    final responses = await Future.wait([
-      for (final q in queries) ...[
-        _getJson(
-          '$rest/cosmos/tx/v1beta1/txs?query=${Uri.encodeComponent(q)}'
-          '&order_by=ORDER_BY_DESC&limit=$limit',
-        ),
-        _getJson(
-          '$rest/cosmos/tx/v1beta1/txs?events=${Uri.encodeComponent(q)}'
-          '&order_by=ORDER_BY_DESC&limit=$limit',
-        ),
-      ],
+    if (rest == null || !enabled) return const [];
+    final size = limit.clamp(1, 100);
+    final reads = await Future.wait([
+      _searchTxs(rest, chain.chainId, "message.sender='$address'", size),
+      _searchTxs(rest, chain.chainId, "transfer.recipient='$address'", size),
     ]);
-
+    if (reads.every((read) => read.rows == null)) {
+      throw ChainReadException(
+        reads.first.failure ?? const ChainReadFailure(ChainReadFailureKind.unreachable),
+      );
+    }
     final seen = <String>{};
     final items = <ActivityItem>[];
-    for (final body in responses) {
-      final rows = body?['tx_responses'];
-      if (rows is! List) continue;
-      for (final row in rows) {
-        final map = row as Map;
-        final hash = map['txhash'] as String? ?? '';
+    for (final read in reads) {
+      for (final row in read.rows ?? const <Object?>[]) {
+        if (row is! Map) continue;
+        final tx = row.map((key, value) => MapEntry('$key', value));
+        final hash = '${tx['txhash'] ?? ''}';
         if (hash.isEmpty || !seen.add(hash)) continue;
-        final messages =
-            ((map['tx'] as Map?)?['body'] as Map?)?['messages'];
-        if (messages is! List || messages.isEmpty) continue;
-        final described =
-            _describe(messages.first as Map, address, denom);
-        items.add(
-          ActivityItem(
-            chainId: chain.chainId,
-            hash: hash,
-            kind: described.kind,
-            title: described.title,
-            subtitle: described.subtitle,
-            amount: described.amount,
-            timestamp:
-                DateTime.tryParse(map['timestamp'] as String? ?? '') ??
-                    DateTime.fromMillisecondsSinceEpoch(0),
-            success: (map['code'] as num?)?.toInt() == 0 || map['code'] == null,
-          ),
+        final item = activityFromTxResponse(
+          tx,
+          chain.chainId,
+          address,
+          feeRecipients: feeRecipients,
         );
+        if (item != null) items.add(item);
       }
     }
-
     items.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-    return items.take(limit).toList();
+    return items.take(size).toList();
+  }
+
+  /// One transaction, read for its detail. Null when the node does not have
+  /// it (not indexed yet, or pruned); throws [ChainReadException] when the
+  /// node could not be asked.
+  Future<TxDetailInfo?> txDetail(
+    ChainEntry chain,
+    String hash,
+    String address, {
+    Map<String, String> feeRecipients = const {},
+  }) async {
+    final rest = _restOf(chain);
+    if (rest == null) {
+      throw const ChainReadException(ChainReadFailure(ChainReadFailureKind.noEndpoint));
+    }
+    final read = await _readJson('$rest/cosmos/tx/v1beta1/txs/${Uri.encodeComponent(hash)}');
+    final failure = read.failure;
+    if (failure != null) {
+      if (failure.kind == ChainReadFailureKind.badStatus &&
+          (failure.statusCode == 404 || failure.statusCode == 400)) {
+        return null;
+      }
+      throw ChainReadException(failure);
+    }
+    return parseTxDetail(read.json, chain.chainId, address, feeRecipients: feeRecipients);
   }
 
   /// IBC channel discovery, validation and state parsing used to live here.

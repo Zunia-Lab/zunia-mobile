@@ -8,28 +8,45 @@ on:
 permissions:
   contents: read
 
+# pubspec.yaml depends on ../zunia-ui and ../zunia-core by path, so the job lays
+# the three repositories out side by side, as on a developer machine. Repository
+# variables ZUNIA_UI_REF / ZUNIA_CORE_REF pick other branches (default main).
 jobs:
   analyze-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: zunia-mobile
+      - uses: actions/checkout@v4
+        with:
+          repository: Zunia-Lab/zunia-ui
+          ref: ${{ vars.ZUNIA_UI_REF || 'main' }}
+          path: zunia-ui
+      - uses: actions/checkout@v4
+        with:
+          repository: Zunia-Lab/zunia-core
+          ref: ${{ vars.ZUNIA_CORE_REF || 'main' }}
+          path: zunia-core
 
-      # Optional: when repo variable ZUNIA_CORE_TAG is set (e.g. v0.1.0), download
-      # public GitHub Release natives. No secrets required for public releases.
-      - name: Fetch native FFI (optional)
-        env:
-          ZUNIA_CORE_TAG: ${{ vars.ZUNIA_CORE_TAG }}
-        run: |
-          if [[ -z "${ZUNIA_CORE_TAG}" ]]; then
-            echo "ZUNIA_CORE_TAG not set; skipping fetch-native"
-            exit 0
-          fi
-          ./scripts/fetch-native.sh
+      # The kernel built for the runner, so the tests that sign, derive and seal
+      # run against the same Rust the app ships (test/flutter_test_config.dart
+      # loads ../zunia-core/target/release/libzunia_ffi.so). rust-toolchain.toml
+      # pins the compiler.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zunia-core
+      - name: Build the host kernel
+        working-directory: zunia-core
+        run: cargo build -p zunia-ffi --release
 
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-      - run: flutter pub get
-      - run: flutter analyze
-      - run: flutter test
+      - name: Analyze and test
+        working-directory: zunia-mobile
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test

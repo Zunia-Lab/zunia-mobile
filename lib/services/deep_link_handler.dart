@@ -3,26 +3,66 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 import 'package:zunia_mobile/config/connect_config.dart';
+import 'package:zunia_mobile/connect/connect_crypto.dart';
+import 'package:zunia_mobile/connect/connect_links.dart';
+import 'package:zunia_mobile/util/address_payload.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/wallet_connect_service.dart';
 
-/// Registers deep / universal links and routes WC + native connect URIs.
-class DeepLinkHandler {
-  DeepLinkHandler({
-    AppLinks? appLinks,
-    WalletConnectService? walletConnect,
-    NativeConnectService? nativeConnect,
-  })  : _appLinks = appLinks ?? AppLinks(),
-        _walletConnect = walletConnect ?? createWalletConnectService(),
-        _nativeConnect = nativeConnect ?? NativeConnectService();
+/// Where links come from: app_links in the app, a stream in tests.
+abstract interface class LinkSource {
+  Future<Uri?> initial();
+  Stream<Uri> get links;
+}
+
+class AppLinksSource implements LinkSource {
+  AppLinksSource([AppLinks? appLinks]) : _appLinks = appLinks ?? AppLinks();
 
   final AppLinks _appLinks;
+
+  @override
+  Future<Uri?> initial() => _appLinks.getInitialLink();
+
+  @override
+  Stream<Uri> get links => _appLinks.uriLinkStream;
+}
+
+/// Routes links other apps, sites and the camera open Zunia with
+/// ([classifyLink] lists them).
+///
+/// Nothing a link asks for happens behind the lock screen: links that arrive
+/// while the wallet is locked wait until the unlocked UI [attach]es, then run
+/// in order. The one exception is a wake link, which only brings an existing
+/// session's socket up so its request is there by the time the user unlocks.
+class DeepLinkHandler {
+  DeepLinkHandler({
+    LinkSource? source,
+    WalletConnectService? walletConnect,
+    NativeConnectService? nativeConnect,
+  }) : _source = source,
+       _nativeConnect = nativeConnect ?? NativeConnectService(),
+       _walletConnect = walletConnect ?? StubWalletConnectService();
+
+  LinkSource? _source;
   final WalletConnectService _walletConnect;
   final NativeConnectService _nativeConnect;
   StreamSubscription<Uri>? _sub;
   final _controller = StreamController<Uri>.broadcast();
+  final _dapps = StreamController<Uri>.broadcast();
+  final _payments = StreamController<PaymentRequest>.broadcast();
+  final List<(Uri, bool)> _held = [];
+  bool _attached = false;
 
+  static const _maxHeld = 8;
+
+  /// Every recognised link, as it arrives.
   Stream<Uri> get links => _controller.stream;
+
+  /// Sites to open in the in-app browser, once the user confirmed the URL.
+  Stream<Uri> get dappRequests => _dapps.stream;
+
+  /// Payment requests (`zunia://pay?...`) to open in Send.
+  Stream<PaymentRequest> get paymentRequests => _payments.stream;
 
   WalletConnectService get walletConnect => _walletConnect;
   NativeConnectService get nativeConnect => _nativeConnect;
@@ -36,16 +76,15 @@ class DeepLinkHandler {
     } catch (e) {
       debugPrint('DeepLinkHandler WC init error: $e');
     }
+    final source = _source ??= AppLinksSource();
     try {
-      final initial = await _appLinks.getInitialLink();
-      if (initial != null) {
-        await _handle(initial);
-      }
+      final initial = await source.initial();
+      if (initial != null) await _receive(initial, fromOutside: true);
     } catch (e) {
       debugPrint('DeepLinkHandler initial link error: $e');
     }
-    _sub = _appLinks.uriLinkStream.listen(
-      _handle,
+    _sub = source.links.listen(
+      (uri) => unawaited(_receive(uri, fromOutside: true)),
       onError: (Object e) => debugPrint('DeepLinkHandler stream error: $e'),
     );
   }
@@ -58,75 +97,92 @@ class DeepLinkHandler {
   Future<void> dispose() async {
     await stop();
     await _controller.close();
+    await _dapps.close();
+    await _payments.close();
   }
 
-  /// Route a URI as if it arrived via deep link (e.g. `wc:` from the browser).
-  Future<void> handleUri(Uri uri) => _handle(uri);
-
-  bool isRecognized(Uri uri) {
-    if (uri.scheme == 'wc') return true;
-    if (kCustomUrlSchemes.contains(uri.scheme)) return true;
-    if (uri.scheme == 'https' &&
-        kUniversalLinkHosts.contains(uri.host) &&
-        kUniversalLinkPaths.any((p) => uri.path.startsWith(p))) {
-      return true;
+  /// The unlocked UI is up: run what waited behind the lock screen.
+  Future<void> attach() async {
+    _attached = true;
+    final held = List.of(_held);
+    _held.clear();
+    for (final (uri, fromOutside) in held) {
+      await _route(uri, fromOutside: fromOutside);
     }
-    return false;
   }
 
-  /// Open-in-browser deep links: `zunia://dapp?url=https://...`
-  static String? parseDappUrl(Uri uri) {
-    if (!kCustomUrlSchemes.contains(uri.scheme)) return null;
-    final host = uri.host.toLowerCase();
-    final isDappPath = uri.pathSegments.isNotEmpty &&
-        uri.pathSegments.first.toLowerCase() == 'dapp';
-    if (host != 'dapp' && !isDappPath) return null;
-    final url = uri.queryParameters['url'] ?? uri.queryParameters['u'];
-    if (url == null || url.isEmpty) return null;
-    return url;
-  }
+  /// The wallet locked: hold links until [attach].
+  void detach() => _attached = false;
 
-  Future<void> _handle(Uri uri) async {
-    if (!isRecognized(uri)) return;
-    if (!_controller.isClosed) {
-      _controller.add(uri);
-    }
+  /// Routes a link found inside Zunia (the in-app browser). Such a link was
+  /// not opened by another app, so it never sends the user anywhere after.
+  Future<void> handleUri(Uri uri) => _receive(uri, fromOutside: false);
 
-    // Browser deep links are surfaced on [links] for the UI to open.
-    if (parseDappUrl(uri) != null) return;
+  bool isRecognized(Uri uri) => classifyLink(uri.toString()) != null;
 
-    final link = uri.toString();
-    if (NativeConnectService.isPairingLink(link)) {
-      try {
-        await _nativeConnect.pair(link);
-      } catch (e) {
-        _nativeConnect.reportError(e);
-      }
+  /// `zunia://dapp?url=https://...` → the https URL, or null.
+  static String? parseDappUrl(Uri uri) =>
+      switch (classifyLink(uri.toString())) {
+        DappLink(:final url) => url.toString(),
+        _ => null,
+      };
+
+  Future<void> _receive(Uri uri, {required bool fromOutside}) async {
+    final link = classifyLink(uri.toString());
+    if (link == null) return;
+    if (!_controller.isClosed) _controller.add(uri);
+    // Waking only reconnects a session this phone already has.
+    if (link is WakeLink) {
+      _nativeConnect.wake(link.sessionId);
       return;
     }
-
-    final wcUri = _extractWalletConnectUri(uri);
-    if (wcUri != null) {
-      try {
-        if (!_walletConnect.isReady && kWalletConnectProjectId.isNotEmpty) {
-          await _walletConnect.init();
-        }
-        if (_walletConnect.isReady) {
-          await _walletConnect.pair(wcUri);
-        }
-      } catch (e) {
-        debugPrint('DeepLinkHandler WC pair error: $e');
-      }
+    if (!_attached) {
+      if (_held.length >= _maxHeld) _held.removeAt(0);
+      _held.add((uri, fromOutside));
+      return;
     }
+    await _route(uri, fromOutside: fromOutside);
   }
 
-  String? _extractWalletConnectUri(Uri uri) {
-    if (uri.scheme == 'wc') return uri.toString();
-    final uriParam = uri.queryParameters['uri'];
-    if (uriParam != null && uriParam.startsWith('wc:')) return uriParam;
-    if (uri.pathSegments.contains('wc') || uri.host == 'wc') {
-      return uriParam;
+  Future<void> _route(Uri uri, {required bool fromOutside}) async {
+    final link = classifyLink(uri.toString());
+    switch (link) {
+      case null:
+        return;
+      case WakeLink(:final sessionId):
+        _nativeConnect.wake(sessionId);
+      case PairLink(link: final raw):
+        // Completes when the site's request arrives, which the inbox shows on
+        // its own; later links need not wait for that.
+        unawaited(
+          _nativeConnect
+              .pair(raw, sameDevice: fromOutside)
+              .then<void>((_) {}, onError: _nativeConnect.reportError),
+        );
+      case WalletConnectPairLink(uri: final wcUri):
+        try {
+          if (!_walletConnect.isReady && kWalletConnectProjectId.isNotEmpty) {
+            await _walletConnect.init();
+          }
+          await _walletConnect.pair(wcUri, sameDevice: fromOutside);
+        } catch (e) {
+          _nativeConnect.reportError(e);
+        }
+      case WalletConnectWakeLink(:final topic):
+        try {
+          await _walletConnect.wake(topic: fromOutside ? topic : null);
+        } catch (e) {
+          debugPrint('DeepLinkHandler WC wake error: $e');
+        }
+      case DappLink(:final url):
+        if (!_dapps.isClosed) _dapps.add(url);
+      case PaymentLink(:final request):
+        if (!_payments.isClosed) _payments.add(request);
+      case AddressLink():
+        // Only the scanner acts on addresses.
+        return;
+      case UnsupportedLink(:final reason):
+        _nativeConnect.reportError(ConnectException('UNSUPPORTED', reason));
     }
-    return null;
   }
 }

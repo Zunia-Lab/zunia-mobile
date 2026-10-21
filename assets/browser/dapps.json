@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "_comment": "Curated dApps on the Discover tab. Edit here, not in code: the tab, the drawer count and the tests read this file. Every URL must be https.",
+  "featured": "osmosis",
+  "categories": ["DeFi", "Bridge", "Staking", "NFT", "Tools"],
+  "dapps": [
+    {
+      "id": "osmosis",
+      "name": "Osmosis",
+      "url": "https://app.osmosis.zone",
+      "category": "DeFi",
+      "description": "Swap and provide liquidity across the Interchain.",
+      "chains": ["osmosis-1"]
+    },
+    {
+      "id": "mars",
+      "name": "Mars Protocol",
+      "url": "https://app.marsprotocol.io",
+      "category": "DeFi",
+      "description": "Lending and leveraged strategies.",
+      "chains": ["osmosis-1"]
+    },
+    {
+      "id": "skip",
+      "name": "Skip:Go",
+      "url": "https://go.skip.build",
+      "category": "Bridge",
+      "description": "Move tokens between chains in one step.",
+      "chains": []
+    },
+    {
+      "id": "restake",
+      "name": "REStake",
+      "url": "https://restake.app",
+      "category": "Staking",
+      "description": "Auto-compound your staking rewards.",
+      "chains": []
+    },
+    {
+      "id": "stargaze",
+      "name": "Stargaze",
+      "url": "https://www.stargaze.zone",
+      "category": "NFT",
+      "description": "NFT marketplace on Stargaze.",
+      "chains": ["stargaze-1"]
+    },
+    {
+      "id": "daodao",
+      "name": "DAO DAO",
+      "url": "https://daodao.zone",
+      "category": "Tools",
+      "description": "Create and govern DAOs.",
+      "chains": []
+    },
+    {
+      "id": "mintscan",
+      "name": "Mintscan",
+      "url": "https://www.mintscan.io",
+      "category": "Tools",
+      "description": "Explorer for Cosmos chains.",
+      "chains": []
+    },
+    {
+      "id": "zunia-ibc-map",
+      "name": "Zunia IBC Map",
+      "url": "https://ibcmap.zunialab.com",
+      "category": "Tools",
+      "description": "Live map of IBC channels and transfers.",
+      "chains": []
+    }
+  ]
+}

@@ -1,32 +1,70 @@
-/// Cross-chain swap: one signature on the source chain, an Osmosis
-/// crosschain-swap executed inside packet processing, and the output delivered
-/// to the destination chain.
+/// Swap: sell any token the wallet holds for any token Osmosis trades,
+/// delivered on the chain the user picks.
 ///
-/// No aggregator. The wallet plans the route with `lib/services/interchain`
-/// (the Dart port of `@zunialab/interchain`), prices the pool against Osmosis
-/// itself, and composes the ibc-hooks memo locally. Every control that cannot
-/// work yet is disabled with the reason next to it.
+/// Matches zunia-extension 0.1.5 in logic (`lib/state/swap_state.dart` holds
+/// it); this file is the native form. Four paths reach Osmosis: the
+/// crosschain-swaps contract (one signature on the chain holding the funds),
+/// Osmosis's own pools for funds already there (optionally sending the
+/// output on in the same transaction), and moving the funds to Osmosis first
+/// when the contract cannot swap the pair where they are. Every control that
+/// cannot work yet is disabled with the reason under it.
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:zunia_mobile/config/interchain_config.dart';
+import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
+import 'package:zunia_mobile/screens/send_screen.dart';
+import 'package:zunia_mobile/screens/swap/swap_settings_sheet.dart';
+import 'package:zunia_mobile/screens/swap/swap_token_sheet.dart';
+import 'package:zunia_mobile/screens/swap/swap_widgets.dart';
 import 'package:zunia_mobile/screens/swap_review_screen.dart';
 import 'package:zunia_mobile/services/interchain/channels.dart';
 import 'package:zunia_mobile/services/interchain/route.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
-import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
+import 'package:zunia_mobile/prices/fiat.dart';
+import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/swap/pool_swap.dart';
+import 'package:zunia_mobile/swap/swap_amounts.dart';
+import 'package:zunia_mobile/swap/swap_assets.dart';
+import 'package:zunia_mobile/swap/swap_fee.dart';
+import 'package:zunia_mobile/swap/swap_path.dart';
+import 'package:zunia_mobile/swap/swap_review.dart';
+import 'package:zunia_mobile/tx/tx_engine.dart';
 import 'package:zunia_mobile/util/amounts.dart';
-import 'package:zunia_mobile/widgets/chain_avatar.dart';
 import 'package:zunia_mobile/widgets/wallet_header.dart';
 import 'package:zunia_ui/zunia_ui.dart';
+
+/// A token's fiat value, when a price source exists for it. Null hides the
+/// hint.
+typedef SwapFiatOf = String? Function(SwapAsset asset, BigInt units);
+
+/// Prices come from the portfolio's snapshot, which prices each chain's own
+/// coin: a token gets a hint only when it is that coin, here or proven to have
+/// travelled from its chain, with known decimals. Anything else stays blank
+/// rather than borrowing a price that may not be its own.
+final swapFiatProvider = Provider<SwapFiatOf>((ref) {
+  final snapshot = ref.watch(pricesProvider).valueOrNull;
+  if (snapshot == null || snapshot.prices.isEmpty) return (asset, units) => null;
+  return (asset, units) {
+    final id = asset.identity;
+    if (!id.decimalsKnown || !id.proven || !ChainCatalog.isLoaded) return null;
+    final origin = id.originChainId ?? id.chainId;
+    final entry = ChainCatalog.instance.find(origin);
+    final base = id.originDenom ?? id.denom;
+    if (entry == null || entry.coinMinimalDenom != base) return null;
+    final price = snapshot.prices[origin]?.price;
+    if (price == null) return null;
+    final value = units / BigInt.from(10).pow(id.decimals) * price;
+    return '≈ ${formatFiatFull(value, snapshot.currency)}';
+  };
+});
 
 class SwapTab extends ConsumerStatefulWidget {
   const SwapTab({super.key, this.showHeader = true});
@@ -38,405 +76,536 @@ class SwapTab extends ConsumerStatefulWidget {
   ConsumerState<SwapTab> createState() => _SwapTabState();
 }
 
-class _SwapTabState extends ConsumerState<SwapTab> {
+class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
   final _amount = TextEditingController();
-  String? _fromId;
-  String? _toId;
   Timer? _debounce;
+  Timer? _refreshTimer;
+  Timer? _ticker;
+  bool _busy = false;
+  String? _error;
+  bool _foreground = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // A view built before this widget mounted may already be plannable.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _schedulePlan(ref.read(swapViewProvider).planKey);
+    });
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
+    _refreshTimer?.cancel();
+    _ticker?.cancel();
     _amount.dispose();
     super.dispose();
   }
 
-  /// Re-plan after the user stops typing. A quote costs several round trips and
-  /// goes stale in seconds, so it is not worth firing one per keystroke.
-  void _schedulePlan() {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) _scheduleRefresh(ref.read(swapViewProvider));
+  }
+
+  /// Plan after the inputs settle: the amount field fires per keystroke and a
+  /// plan is several round trips.
+  void _schedulePlan(String key) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 600), _plan);
+    if (key.isEmpty) return;
+    _debounce = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      final view = ref.read(swapViewProvider);
+      if (view.planKey == key) {
+        unawaited(ref.read(swapControllerProvider.notifier).plan(view));
+      }
+    });
   }
 
-  Future<void> _plan() async {
-    final accounts = ref.read(chainAccountsProvider);
-    if (accounts.length < 2) return;
-    final from = _accountFor(accounts, _fromId) ?? accounts.first;
-    final to = _accountFor(accounts, _toId) ??
-        accounts.firstWhere((a) => a.chain.chainId != from.chain.chainId);
-    final units = toBaseUnits(_amount.text.trim(), from.chain.coinDecimals);
-    await ref.read(swapControllerProvider.notifier).plan(
-          from: from,
-          to: to,
-          amountBaseUnits: units ?? '',
-          phrase: ref.read(phraseProvider),
-          accountIndex: ref.read(walletProvider).active?.index ?? 0,
-        );
+  /// The form keeps the price current on its own, while it is on screen. The
+  /// confirm card does not: a number changing under the user's thumb right
+  /// before they sign is worse than asking them to refresh it.
+  void _scheduleRefresh(SwapView view) {
+    _refreshTimer?.cancel();
+    final at = view.quotedAt;
+    final ttl = view.data?.config.quoteTtl;
+    if (at == null || ttl == null || view.planKey.isEmpty) return;
+    final due = at.add(ttl).difference(ref.read(swapClockProvider)());
+    _refreshTimer = Timer(due.isNegative ? Duration.zero : due, () {
+      if (!mounted || !_visible()) return;
+      final current = ref.read(swapViewProvider);
+      if (current.planKey == view.planKey && !current.refreshing) {
+        unawaited(ref.read(swapControllerProvider.notifier).refresh(current));
+      }
+    });
   }
 
-  ChainAccount? _accountFor(List<ChainAccount> accounts, String? chainId) {
-    if (chainId == null) return null;
-    for (final account in accounts) {
-      if (account.chain.chainId == chainId) return account;
+  bool _visible() =>
+      _foreground &&
+      (ModalRoute.of(context)?.isCurrent ?? true) &&
+      TickerMode.valuesOf(context).enabled;
+
+  void _syncTicker(SwapView view) {
+    final wanted = view.quotedAt != null;
+    if (wanted && _ticker == null) {
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted || !_visible()) return;
+        setState(() {});
+        // Back on screen after the price ran out (the review was open, or the
+        // app was away): fetch a new one rather than wait for a tap.
+        final current = ref.read(swapViewProvider);
+        final at = current.quotedAt;
+        final ttl = current.data?.config.quoteTtl;
+        if (at != null &&
+            ttl != null &&
+            !current.refreshing &&
+            current.planKey.isNotEmpty &&
+            ref.read(swapClockProvider)().difference(at) >= ttl) {
+          unawaited(_controller.refresh(current));
+        }
+      });
+    } else if (!wanted && _ticker != null) {
+      _ticker?.cancel();
+      _ticker = null;
     }
-    return null;
+  }
+
+  SwapController get _controller => ref.read(swapControllerProvider.notifier);
+
+  Future<void> _pickFrom(SwapView view) async {
+    final key = await showSwapTokenSheet(
+      context,
+      title: 'You pay',
+      options: view.sources,
+      selectedKey: view.from?.key,
+      hideAmounts: ref.read(preferencesProvider).hideAmounts,
+    );
+    if (key == null || !mounted) return;
+    _controller.pickFrom(key);
+    _amount.clear();
+  }
+
+  Future<void> _pickTo(SwapView view) async {
+    final key = await showSwapTokenSheet(
+      context,
+      title: 'You receive',
+      options: view.destinations,
+      selectedKey: view.to?.key,
+      hideAmounts: ref.read(preferencesProvider).hideAmounts,
+    );
+    if (key == null || !mounted) return;
+    _controller.pickTo(key);
+  }
+
+  void _flip(SwapView view) {
+    if (_controller.flip(view)) {
+      ZuniaHaptics.selection();
+      final next = ref.read(swapViewProvider);
+      _amount.text = next.amountText;
+    }
+  }
+
+  void _max(SwapView view) {
+    _controller.applyMax(view);
+    ZuniaHaptics.selection();
+    _amount.text = ref.read(swapViewProvider).amountText;
+  }
+
+  Future<void> _openSettings(SwapView view) async {
+    final data = view.data;
+    if (data == null) return;
+    await showSwapSettingsSheet(
+      context,
+      config: data.config,
+      settings: ref.read(swapSettingsProvider),
+      onSave: (next) =>
+          unawaited(ref.read(swapSettingsProvider.notifier).update(next)),
+    );
+  }
+
+  Future<void> _review(SwapView view) async {
+    final phrase = ref.read(phraseProvider);
+    final index = ref.read(walletProvider).active?.index ?? 0;
+    if (phrase == null) {
+      setState(() => _error = 'Unlock the wallet to swap.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final prepared = await _controller.prepareReview(view);
+      final settings = ref.read(swapSettingsProvider);
+      final quote = await TxEngine.instance.quote(
+        phrase: phrase,
+        accountIndex: index,
+        chain: prepared.chain,
+        signer: prepared.review.signer,
+        msgs: prepared.msgs,
+        memo: prepared.memo,
+        speed: settings.feeSpeed,
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final done = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => SwapReviewScreen(prepared: prepared, quote: quote),
+        ),
+      );
+      if (done == true && mounted) {
+        _controller.clearAmount();
+        _amount.clear();
+        ref.invalidate(swapHoldingsProvider);
+      }
+    } on Object catch (error) {
+      if (!mounted) return;
+      ZuniaHaptics.error();
+      setState(() {
+        _busy = false;
+        _error = error is TxException ? error.message : '$error';
+      });
+    }
+  }
+
+  Future<void> _moveFirst(SwapView view) async {
+    final from = view.from;
+    if (from == null) return;
+    await _controller.rememberMoveFirst(view);
+    if (!mounted) return;
+    // Send opens on the move itself: this token, to Osmosis. Swap remembers
+    // the pair and picks it up when the user comes back.
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SendScreen(
+          initialChainId: from.chainId,
+          initialDenom: from.identity.denom,
+          initialDestChainId: 'osmosis-1',
+          initialCross: true,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final s = ZuniaSemanticsExt.of(context);
-    final prefs = ref.watch(preferencesProvider);
     final accounts = ref.watch(chainAccountsProvider);
-    final balances = ref.watch(balancesProvider).valueOrNull ?? const {};
-    final plan = ref.watch(swapControllerProvider);
-    final venue = ref.watch(swapVenueStatusProvider);
+    final prefs = ref.watch(preferencesProvider);
+    final view = ref.watch(swapViewProvider);
+    final settings = ref.watch(swapSettingsProvider);
 
-    if (accounts.length < 2) {
+    ref.listen<String>(
+      swapViewProvider.select((v) => v.planKey),
+      (_, key) => _schedulePlan(key),
+    );
+    ref.listen<DateTime?>(swapViewProvider.select((v) => v.quotedAt), (_, _) {
+      _scheduleRefresh(ref.read(swapViewProvider));
+    });
+    _syncTicker(view);
+
+    // The field follows the form when it changes from elsewhere (a pick, a
+    // review that pinned the pair, an intent restored on open).
+    if (_amount.text != view.amountText && !FocusScope.of(context).hasFocus) {
+      _amount.text = view.amountText;
+    }
+
+    if (accounts.isEmpty) {
       return _Shell(
         showHeader: widget.showHeader,
         child: Center(
           child: ZuniaEmptyState(
-            title: 'Need two networks',
-            description: 'Enable at least two chains to swap between.',
+            title: 'No networks enabled',
+            description: 'Enable a network that holds tokens to swap them.',
             action: ZuniaButton(
               label: 'Networks',
               size: ZuniaButtonSize.sm,
               variant: ZuniaButtonVariant.secondary,
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const NetworksScreen()),
-              ),
+              onPressed: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const NetworksScreen())),
             ),
           ),
         ),
       );
     }
 
-    final from = _accountFor(accounts, _fromId) ?? accounts.first;
-    final to = _accountFor(accounts, _toId) ??
-        accounts.firstWhere((a) => a.chain.chainId != from.chain.chainId);
-
-    String available(ChainAccount account) {
-      final base = balances[account.chain.chainId]?.available;
-      if (base == null) return '—';
-      return prefs.mask(
-        formatBaseUnits(base, decimals: account.chain.coinDecimals),
-      );
-    }
-
-    final venueOffline = venue.maybeWhen(
-      data: (status) => status.ready ? null : status.reason,
-      orElse: () => null,
-    );
-    final blocked = venueOffline ?? plan.blockedReason;
-
-    final status = blocked ??
-        plan.planError ??
-        plan.quoteError ??
-        (plan.planning
-            ? 'Finding route…'
-            : plan.quoting
-                ? 'Pricing…'
-                : null);
+    final from = view.from;
+    final to = view.to;
+    final moveFirst = view.path == SwapPath.moveFirst;
+    final reason =
+        _error ??
+        (moveFirst
+            ? view.moveBlocked
+            : (view.ready ? null : view.blockedReason));
 
     return _Shell(
       showHeader: widget.showHeader,
+      title: _TitleRow(
+        onSettings: view.data == null ? null : () => _openSettings(view),
+      ),
       footer: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            ZuniaButton(
-              label: 'Review',
-              size: ZuniaButtonSize.lg,
-              loading: plan.planning || plan.quoting,
-              onPressed: plan.ready
-                  ? () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => SwapReviewScreen(from: from, to: to),
-                        ),
-                      )
-                  : null,
-            ),
-            if (status != null) ...[
+            if (moveFirst && from != null)
+              ZuniaButton(
+                label: 'Move to Osmosis',
+                size: ZuniaButtonSize.lg,
+                onPressed: view.moveBlocked == null && !_busy
+                    ? () => _moveFirst(view)
+                    : null,
+              )
+            else
+              ZuniaButton(
+                label: _busy ? 'Getting price…' : 'Review swap',
+                size: ZuniaButtonSize.lg,
+                loading: _busy,
+                onPressed: view.ready && !_busy ? () => _review(view) : null,
+              ),
+            if (reason != null) ...[
               const SizedBox(height: 8),
               Semantics(
                 liveRegion: true,
                 child: Text(
-                  status,
+                  reason,
                   textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: zuniaMono(fontSize: 10.5, color: s.fgMuted),
+                  style: zuniaSans(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: _error != null ? s.danger : s.fgMuted,
+                  ),
                 ),
               ),
             ],
           ],
         ),
       ),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
-        children: [
-          _Leg(
-            label: 'You pay',
-            account: from,
-            available: available(from),
-            controller: _amount,
-            accounts: accounts,
-            onPick: (id) {
-              setState(() {
-                _fromId = id;
-                if (_toId == id) _toId = null;
-              });
-              _plan();
-            },
-            onAmountChanged: (_) => _schedulePlan(),
-          ),
-          const SizedBox(height: 6),
-          Center(
-            child: Semantics(
-              button: true,
-              label: 'Flip networks',
-              child: Material(
-                color: s.accent,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () {
-                    setState(() {
-                      final previous = from.chain.chainId;
-                      _fromId = to.chain.chainId;
-                      _toId = previous;
-                    });
-                    _plan();
-                  },
-                  child: SizedBox(
-                    width: 40,
-                    height: 40,
-                    child: Icon(Icons.swap_vert, size: 16, color: s.accentFg),
+      child: view.loading
+          ? const _FormSkeleton()
+          : view.sources.isEmpty && view.holdingsLoaded
+          ? Center(
+              child: ZuniaEmptyState(
+                title: 'Nothing to swap yet',
+                description: prefs.liveReads
+                    ? 'This wallet holds no tokens on its enabled networks.'
+                    : 'Turn on live reads in Settings to see what this wallet holds.',
+              ),
+            )
+          : ZuniaRefresh(
+              onRefresh: _reload,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                physics: const AlwaysScrollableScrollPhysics(),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                children: [
+                  _PayCard(
+                    view: view,
+                    controller: _amount,
+                    hidden: prefs.hideAmounts,
+                    fiat: from == null || view.amountUnits == null
+                        ? null
+                        : ref.watch(swapFiatProvider)(from, view.amountUnits!),
+                    onPick: () => _pickFrom(view),
+                    onMax: () => _max(view),
+                    onChanged: (text) {
+                      if (from != null) _controller.setAmount(text, from);
+                    },
                   ),
-                ),
+                  _FlipButton(view: view, onFlip: () => _flip(view)),
+                  _ReceiveCard(
+                    view: view,
+                    fiat: to == null || view.quote == null
+                        ? null
+                        : ref.watch(swapFiatProvider)(
+                            to,
+                            BigInt.parse(view.quote!.outputAmount),
+                          ),
+                    onPick: () => _pickTo(view),
+                  ),
+                  const SizedBox(height: 14),
+                  _Fees(view: view, settings: settings),
+                  if (view.quote != null && view.quotedAt != null) ...[
+                    const SizedBox(height: 4),
+                    SwapQuoteClock(
+                      secondsLeft: _secondsLeft(view),
+                      refreshing: view.refreshing,
+                      onRefresh: () => unawaited(_controller.refresh(view)),
+                    ),
+                  ],
+                  ..._notes(context, view),
+                  if (settings.routeDetails) ...[
+                    const SizedBox(height: 12),
+                    _RouteDetails(view: view),
+                  ],
+                ],
               ),
             ),
-          ),
-          const SizedBox(height: 6),
-          _Leg(
-            label: 'You get',
-            account: to,
-            available: available(to),
-            accounts: accounts
-                .where((a) => a.chain.chainId != from.chain.chainId)
-                .toList(),
-            onPick: (id) {
-              setState(() => _toId = id);
-              _plan();
-            },
-            estimate: _estimatedOut(plan, to),
-          ),
-          const SizedBox(height: 14),
-          ZuniaSwapQuotePanel(
-            quote: _quoteView(plan, from, to),
-            gasChainName: from.chain.chainName,
-            swapVenueName: _venueName(),
-            slippagePercent: plan.slippagePercent,
-            slippagePresets: kSlippagePresets,
-            onSlippageChanged: (value) {
-              ref.read(swapControllerProvider.notifier).setSlippage(value);
-              _plan();
-            },
-            loading: plan.quoting,
-            error: plan.quoteError,
-            onRetry: _plan,
-            compact: true,
-            title: null,
-          ),
-          const SizedBox(height: 8),
-          _RouteDetails(
-            plan: plan,
-            from: from,
-            to: to,
-            venueName: _venueName(),
-            venueChainId: _venueChainId(),
-            onRetry: _plan,
-            onChannelChanged: (index, value, fromChainId, toChainId) {
-              ref.read(swapControllerProvider.notifier).setOverride(
-                    index,
-                    value,
-                    fromChainId: fromChainId,
-                    toChainId: toChainId,
-                  );
-              _schedulePlan();
-            },
-            channelValueFor: (index) =>
-                ref.read(swapControllerProvider.notifier).overrideFor(index),
-            hops: _previewHops(plan),
-          ),
-          if (venueOffline != null || !prefs.liveReads) ...[
-            const SizedBox(height: 12),
-            ZuniaCallout(
-              tone: ZuniaCalloutTone.warning,
-              title: !prefs.liveReads ? 'Live reads off' : 'Swaps unavailable',
-              body: !prefs.liveReads
-                  ? 'Turn live reads on in Settings.'
-                  : venueOffline!,
-            ),
-          ],
-        ],
-      ),
     );
   }
 
-  String _venueChainId() =>
-      ref.read(swapVenueStatusProvider).valueOrNull?.chainId ??
-      kSwapVenueChainId;
-
-  String _venueName() {
-    final status = ref.read(swapVenueStatusProvider).valueOrNull;
-    final chainId = status?.chainId ?? kSwapVenueChainId;
-    return ref.read(interchainRegistryProvider).get(chainId)?.chainName ??
-        chainId;
-  }
-
-  String? _estimatedOut(SwapPlanState plan, ChainAccount to) {
-    final quote = plan.quote;
-    if (quote == null) return null;
-    return formatBaseUnitsExact(
-      quote.outputAmount,
-      decimals: to.chain.coinDecimals,
-      maxFractionDigits: 6,
-    );
-  }
-
-  ZuniaSwapQuoteView? _quoteView(
-    SwapPlanState plan,
-    ChainAccount from,
-    ChainAccount to,
-  ) {
-    final quote = plan.quote;
-    if (quote == null) return null;
-    final inAmount = formatBaseUnitsExact(
-      quote.inputAmount,
-      decimals: from.chain.coinDecimals,
-      maxFractionDigits: 6,
-    );
-    final outAmount = formatBaseUnitsExact(
-      quote.outputAmount,
-      decimals: to.chain.coinDecimals,
-      maxFractionDigits: 6,
-    );
-    final rate = _rateLine(quote, from, to);
-    return ZuniaSwapQuoteView(
-      inputAmount: inAmount,
-      inputSymbol: from.chain.coinDenom,
-      outputAmount: outAmount,
-      outputSymbol: to.chain.coinDenom,
-      rate: rate,
-      minReceived: formatBaseUnitsExact(
-        quote.minReceived,
-        decimals: to.chain.coinDecimals,
-        maxFractionDigits: 6,
-      ),
-      // Null stays null: the panel renders "not reported" rather than a zero
-      // that would read as "no impact".
-      priceImpact: quote.priceImpact,
-      poolFee: quote.poolFee,
-      route: [
-        for (final leg in quote.route) ZuniaSwapPoolLeg(poolId: leg.poolId),
-      ],
-    );
-  }
-
-  String? _rateLine(SwapQuote quote, ChainAccount from, ChainAccount to) {
-    final input = BigInt.tryParse(quote.inputAmount);
-    final output = BigInt.tryParse(quote.outputAmount);
-    if (input == null || output == null || input == BigInt.zero) return null;
-    // Scaled integer division, then one conversion: base units routinely exceed
-    // what a double can hold exactly.
-    const scale = 1000000;
-    final scaled = (output * BigInt.from(scale)) ~/ input;
-    final perUnit = scaled.toDouble() /
-        scale *
-        _pow10(from.chain.coinDecimals - to.chain.coinDecimals);
-    return '1 ${from.chain.coinDenom} ≈ '
-        '${formatCompact(perUnit, fractionDigits: 4)} ${to.chain.coinDenom}';
-  }
-
-  double _pow10(int exponent) {
-    var value = 1.0;
-    for (var i = 0; i < exponent.abs(); i++) {
-      value *= 10;
+  /// Pull to refresh: read the balances again and plan the same inputs anew.
+  Future<void> _reload() async {
+    ref.invalidate(swapHoldingsProvider);
+    _controller.retry();
+    try {
+      await ref.read(swapHoldingsProvider.future);
+    } on Object {
+      // The form says what is missing; the gesture just ends.
     }
-    return exponent >= 0 ? value : 1 / value;
   }
 
-  List<ZuniaRoutePreviewHop> _previewHops(SwapPlanState plan) {
-    final candidate = plan.candidate;
-    if (candidate == null) return const [];
-    final registry = ref.read(interchainRegistryProvider);
-    var linkIndex = 0;
-    final hops = <ZuniaRoutePreviewHop>[];
-    for (final hop in candidate.plan.hops) {
-      final link = hop.kind == RouteHopKind.swap || linkIndex >= candidate.links.length
-          ? null
-          : candidate.links[linkIndex];
-      if (hop.kind != RouteHopKind.swap) linkIndex += 1;
-      hops.add(ZuniaRoutePreviewHop(
-        chainId: hop.chainId,
-        chainName: registry.get(hop.chainId)?.chainName,
-        counterpartyChainId: hop.counterpartyChainId,
-        counterpartyChainName: hop.counterpartyChainId == null
-            ? null
-            : registry.get(hop.counterpartyChainId!)?.chainName,
-        channelId: hop.channelId,
-        port: hop.port.isEmpty ? 'transfer' : hop.port,
-        kind: switch (hop.kind) {
-          RouteHopKind.transfer => ZuniaRouteHopKind.transfer,
-          RouteHopKind.forward => ZuniaRouteHopKind.forward,
-          RouteHopKind.swap => ZuniaRouteHopKind.swap,
-        },
-        channelSource: switch (link?.source) {
-          ChannelLinkSource.manual => ZuniaChannelSource.manual,
-          ChannelLinkSource.verified => ZuniaChannelSource.discovered,
-          _ => ZuniaChannelSource.seed,
-        },
-        // Only an explicit true claims verification.
-        channelVerified: link?.source == ChannelLinkSource.verified &&
-            link?.state == IbcChannelState.open,
-        channelState: switch (link?.state) {
-          IbcChannelState.open => ZuniaChannelState.open,
-          IbcChannelState.closed => ZuniaChannelState.closed,
-          IbcChannelState.init => ZuniaChannelState.init,
-          IbcChannelState.tryopen => ZuniaChannelState.tryopen,
-          _ => ZuniaChannelState.unknown,
-        },
-      ));
+  int _secondsLeft(SwapView view) {
+    final at = view.quotedAt;
+    final ttl = view.data?.config.quoteTtl;
+    if (at == null || ttl == null) return 0;
+    final left = ttl - ref.read(swapClockProvider)().difference(at);
+    return left.isNegative ? 0 : (left.inMilliseconds / 1000).ceil();
+  }
+
+  List<Widget> _notes(BuildContext context, SwapView view) {
+    final from = view.from;
+    final to = view.to;
+    final out = <Widget>[];
+    void add(Widget widget) => out
+      ..add(const SizedBox(height: 12))
+      ..add(widget);
+
+    if (!view.liveReads) {
+      add(
+        const ZuniaCallout(
+          tone: ZuniaCalloutTone.warning,
+          title: 'Live reads are off',
+          body:
+              'Swapping reads balances, routes and prices from public endpoints. Turn live reads on in Settings.',
+        ),
+      );
     }
-    return hops;
+    if (view.path == SwapPath.moveFirst && from != null && to != null) {
+      final quote = view.quote;
+      add(
+        ZuniaCallout(
+          tone: ZuniaCalloutTone.info,
+          title: 'Two steps, both on Osmosis',
+          body:
+              "Osmosis's swap contract has no route from ${from.ticker} to ${to.ticker}, "
+              "and Osmosis's own pools swap only tokens already on Osmosis.\n"
+              '1. Move your ${from.ticker} from ${from.chainName} to your Osmosis address with Send: '
+              'an IBC transfer, with no Zunia fee.\n'
+              '2. Come back here: Swap opens on your ${from.ticker} on Osmosis and swaps it in one '
+              'transaction${quote == null ? '' : ', for about ${swapTickerAmount(quote.outputAmount, to.identity)} at today\'s price'}.',
+        ),
+      );
+    }
+    if (view.path == SwapPath.poolDeliver &&
+        to != null &&
+        view.pool?.quote.minOut != null) {
+      final bought = view.data!.book.identityOf(
+        view.venueChainId,
+        view.pool!.venueOutputDenom,
+      );
+      add(
+        Text(
+          'In the same transaction, ${swapTickerAmount(view.pool!.quote.minOut!, bought)} '
+          "(the swap's guaranteed minimum) goes on to your address on ${to.chainName}. "
+          'Anything the swap pays above it stays in your Osmosis account.',
+          style: zuniaSans(
+            fontSize: 12,
+            height: 1.45,
+            color: ZuniaSemanticsExt.of(context).fgMuted,
+          ),
+        ),
+      );
+    }
+    if (view.path == SwapPath.contract &&
+        view.venue != null &&
+        !view.venue!.ready &&
+        !view.venueLoading) {
+      add(
+        ZuniaCallout(
+          tone: ZuniaCalloutTone.danger,
+          title: 'Cross-chain swaps are off',
+          body:
+              view.venue!.reason ?? 'The swap contract could not be confirmed.',
+        ),
+      );
+    }
+    if (view.quoteError != null && !view.planning) {
+      add(
+        ZuniaCallout(
+          tone: ZuniaCalloutTone.danger,
+          title: 'No price for this swap',
+          body: view.quoteError!,
+        ),
+      );
+    }
+    if (view.fee != null &&
+        view.fee!.charged &&
+        view.path == SwapPath.contract &&
+        view.from?.chainId != view.venueChainId) {
+      add(
+        Text(
+          'If the swap fails on Osmosis, the amount swapped comes back to you, but the ${feeRateText(view.fee!.bps)} Zunia fee does not.',
+          style: zuniaSans(
+            fontSize: 12,
+            height: 1.45,
+            color: ZuniaSemanticsExt.of(context).fgMuted,
+          ),
+        ),
+      );
+    }
+    if (view.osmosisError != null) {
+      add(
+        Text(
+          'The Osmosis token list did not load (${view.osmosisError}), so only chain coins and your own tokens are offered to receive.',
+          style: zuniaSans(
+            fontSize: 12,
+            height: 1.45,
+            color: ZuniaSemanticsExt.of(context).fgMuted,
+          ),
+        ),
+      );
+    }
+    return out;
   }
 }
 
-/// Header plus gradient, shared by every state of the tab.
+/* -------------------------------------------------------------------------- *
+ * Layout pieces
+ * -------------------------------------------------------------------------- */
+
 class _Shell extends StatelessWidget {
-  const _Shell({required this.child, this.footer, this.showHeader = true});
+  const _Shell({
+    required this.child,
+    this.footer,
+    this.title,
+    this.showHeader = true,
+  });
 
   final Widget child;
   final Widget? footer;
+  final Widget? title;
   final bool showHeader;
 
   @override
   Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(gradient: s.screenGradient),
+    return ZuniaBackdrop(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (showHeader)
             WalletHeader(
-              onOpenNetworks: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const NetworksScreen()),
-              ),
+              onOpenNetworks: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const NetworksScreen())),
             ),
+          ?title,
           Expanded(child: child),
           ?footer,
         ],
@@ -445,103 +614,720 @@ class _Shell extends StatelessWidget {
   }
 }
 
-/// Collapsed route + channel overrides so the main swap view stays lean.
-class _RouteDetails extends StatelessWidget {
-  const _RouteDetails({
-    required this.plan,
-    required this.from,
-    required this.to,
-    required this.venueName,
-    required this.venueChainId,
-    required this.onRetry,
-    required this.onChannelChanged,
-    required this.channelValueFor,
-    required this.hops,
-  });
+class _TitleRow extends StatelessWidget {
+  const _TitleRow({required this.onSettings});
 
-  final SwapPlanState plan;
-  final ChainAccount from;
-  final ChainAccount to;
-  final String venueName;
-  final String venueChainId;
-  final VoidCallback onRetry;
-  final void Function(
-    int index,
-    String channelId,
-    String? fromChainId,
-    String? toChainId,
-  ) onChannelChanged;
-  final String? Function(int index) channelValueFor;
-  final List<ZuniaRoutePreviewHop> hops;
+  final VoidCallback? onSettings;
 
   @override
   Widget build(BuildContext context) {
     final s = ZuniaSemanticsExt.of(context);
-    final hopCount = hops.isEmpty ? plan.hops.length : hops.length;
-    final subtitle = plan.planning
-        ? 'Planning…'
-        : hopCount == 0
-            ? 'Enter an amount'
-            : '$hopCount hop${hopCount == 1 ? '' : 's'} · $venueName';
-
-    return Theme(
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: const EdgeInsets.only(bottom: 4),
-        iconColor: s.fgMuted,
-        collapsedIconColor: s.fgMuted,
-        title: Text(
-          'Route',
-          style: zuniaSans(
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-            color: s.fg,
-          ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: zuniaMono(fontSize: 10.5, color: s.fgMuted),
-        ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 2, 8, 2),
+      child: Row(
         children: [
-          ZuniaRoutePreview(
-            hops: hops,
-            estimatedDurationSeconds:
-                plan.candidate?.plan.estimatedDurationSeconds,
-            warnings: plan.warnings,
-            requiresPfm: plan.candidate?.plan.requiresPfm ?? false,
-            requiresIbcHooks: plan.candidate?.plan.requiresIbcHooks ?? false,
-            gasChainName: from.chain.chainName,
-            swapVenueName: venueName,
-            loading: plan.planning,
-            error: plan.planError,
-            onRetry: onRetry,
-            emptyTitle: 'No route',
-            emptyDescription: 'Enter an amount to plan hops.',
-            compact: true,
-            title: null,
-            footer: _ChannelOverrides(
-              hops: plan.hops,
-              fallback: plan.candidate == null
-                  ? [
-                      _HopPair(
-                        index: 0,
-                        fromChainId: from.chain.chainId,
-                        toChainId: venueChainId,
-                      ),
-                      _HopPair(
-                        index: 1,
-                        fromChainId: venueChainId,
-                        toChainId: to.chain.chainId,
-                      ),
-                    ]
-                  : const [],
-              onChanged: onChannelChanged,
-              valueFor: channelValueFor,
+          Expanded(
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.end,
+              spacing: 8,
+              children: [
+                Semantics(
+                  header: true,
+                  child: Text(
+                    'Swap',
+                    style: zuniaSans(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.4,
+                      color: s.fg,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Text(
+                    'via Osmosis',
+                    style: zuniaSans(fontSize: 12, color: s.fgDim),
+                  ),
+                ),
+              ],
             ),
+          ),
+          ZuniaIconButton(
+            label: 'Swap settings',
+            icon: Icons.tune,
+            onPressed: onSettings,
           ),
         ],
       ),
+    );
+  }
+}
+
+class _FormSkeleton extends StatelessWidget {
+  const _FormSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    Widget card() => Container(
+      height: 118,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: s.surfaceRaisedGradient,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SwapSkeletonLine(width: 70, height: 9),
+          SizedBox(height: 22),
+          SwapSkeletonLine(width: 160, height: 22),
+        ],
+      ),
+    );
+    return Semantics(
+      label: 'Loading what this wallet can swap',
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+        physics: const NeverScrollableScrollPhysics(),
+        children: [card(), card()],
+      ),
+    );
+  }
+}
+
+/// The token button on either card: logo with its chain badge, ticker, and
+/// where it is.
+class _TokenButton extends StatelessWidget {
+  const _TokenButton({
+    required this.asset,
+    required this.onTap,
+    required this.semanticLabel,
+  });
+
+  final SwapAsset? asset;
+  final VoidCallback? onTap;
+  final String semanticLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    final asset = this.asset;
+    return Semantics(
+      container: true,
+      button: true,
+      label: asset == null
+          ? semanticLabel
+          : '$semanticLabel: ${asset.ticker} on ${asset.chainName}',
+      excludeSemantics: true,
+      child: Material(
+        color: s.glass,
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(6, 6, 10, 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (asset != null)
+                    SwapTokenMark(
+                      identity: asset.identity,
+                      chainIconUrl: asset.chainIconUrl,
+                      size: 28,
+                    )
+                  else
+                    const SizedBox(width: 4),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          asset?.ticker ?? 'Select',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: zuniaSans(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: s.fg,
+                          ),
+                        ),
+                        if (asset != null)
+                          Text(
+                            'on ${asset.chainName}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: zuniaSans(fontSize: 11, color: s.fgMuted),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(Icons.expand_more, size: 18, color: s.fgMuted),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Card extends StatelessWidget {
+  const _Card({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: s.surfaceRaisedGradient,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: s.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+        child: child,
+      ),
+    );
+  }
+}
+
+class _PayCard extends StatelessWidget {
+  const _PayCard({
+    required this.view,
+    required this.controller,
+    required this.hidden,
+    required this.fiat,
+    required this.onPick,
+    required this.onMax,
+    required this.onChanged,
+  });
+
+  final SwapView view;
+  final TextEditingController controller;
+  final bool hidden;
+  final String? fiat;
+  final VoidCallback onPick;
+  final VoidCallback onMax;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    final from = view.from;
+    final spendable = view.spendable;
+    final maxLabel = from == null || spendable == null
+        ? null
+        : hidden
+        ? '••••'
+        : '${swapAmountText(spendable, from.identity)}${from.decimalsKnown ? ' ${from.ticker}' : ''}';
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                'YOU PAY',
+                style: zuniaMono(
+                  fontSize: 10.5,
+                  letterSpacing: 0.8,
+                  color: s.fgMuted,
+                ),
+              ),
+              const Spacer(),
+              if (maxLabel != null)
+                Flexible(
+                  flex: 4,
+                  child: Semantics(
+                    container: true,
+                    button: true,
+                    label: 'Use the maximum, $maxLabel',
+                    excludeSemantics: true,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: onMax,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 6,
+                        ),
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: maxLabel,
+                                style: zuniaMono(
+                                  fontSize: 11,
+                                  color: s.fgMuted,
+                                ),
+                              ),
+                              TextSpan(
+                                text: '  Max',
+                                style: zuniaMono(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: s.accent,
+                                ),
+                              ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 10,
+            children: [
+              _TokenButton(
+                asset: from,
+                onTap: onPick,
+                semanticLabel: 'Token to pay with',
+              ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 120, maxWidth: 220),
+                child: IntrinsicWidth(
+                  child: Semantics(
+                    label: 'Amount to pay',
+                    textField: true,
+                    child: TextField(
+                      controller: controller,
+                      enabled: from != null,
+                      // Without a proven exponent a typed "1.5" has no meaning
+                      // in base units: only Max, the exact balance, sets it.
+                      readOnly: from != null && !from.decimalsKnown,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: const [DecimalDigitFormatter()],
+                      textAlign: TextAlign.right,
+                      onChanged: onChanged,
+                      style: zuniaSans(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: -0.9,
+                        color: s.fg,
+                        tabular: const FontFeature.tabularFigures(),
+                      ),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        filled: false,
+                        hintText: '0',
+                        hintStyle: zuniaSans(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w500,
+                          color: s.fgDim,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (fiat != null || (from != null && !from.decimalsKnown)) ...[
+            const SizedBox(height: 6),
+            Text(
+              from != null && !from.decimalsKnown
+                  ? "This token's decimals are unknown: the amount is in base units, and only Max sets it."
+                  : fiat!,
+              textAlign: TextAlign.right,
+              style: zuniaMono(fontSize: 11, color: s.fgDim),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _FlipButton extends StatelessWidget {
+  const _FlipButton({required this.view, required this.onFlip});
+
+  final SwapView view;
+  final VoidCallback onFlip;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    final to = view.to;
+    final from = view.from;
+    final canFlip = from != null && to != null && to.held && from.key != to.key;
+    final label = to != null && !to.held
+        ? 'Swap the two sides: you hold no ${to.ticker} on ${to.chainName} to sell'
+        : 'Swap the two sides';
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Semantics(
+          container: true,
+          button: true,
+          enabled: canFlip,
+          label: label,
+          excludeSemantics: true,
+          child: Material(
+            color: canFlip ? s.accent : s.glass2,
+            shape: CircleBorder(side: BorderSide(color: s.bg, width: 3)),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: canFlip ? onFlip : null,
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Icon(
+                  Icons.swap_vert,
+                  size: 20,
+                  color: canFlip ? s.accentFg : s.fgDim,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReceiveCard extends StatelessWidget {
+  const _ReceiveCard({
+    required this.view,
+    required this.fiat,
+    required this.onPick,
+  });
+
+  final SwapView view;
+  final String? fiat;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    final to = view.to;
+    final quote = view.quote;
+    final waiting = view.planning || (view.refreshing && quote == null);
+    final estimate = to == null || quote == null
+        ? null
+        : swapAmountText(quote.outputAmount, to.identity);
+    final where = to == null
+        ? null
+        : view.path == SwapPath.poolDeliver
+        ? 'Swapped on Osmosis, delivered on ${to.chainName}'
+        : 'Delivered on ${to.chainName}';
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'YOU RECEIVE',
+            style: zuniaMono(
+              fontSize: 10.5,
+              letterSpacing: 0.8,
+              color: s.fgMuted,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 10,
+            children: [
+              _TokenButton(
+                asset: to,
+                onTap: view.from == null ? null : onPick,
+                semanticLabel: 'Token to receive',
+              ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: waiting
+                    ? const SwapSkeletonLine(
+                        key: ValueKey('skeleton'),
+                        width: 110,
+                        height: 24,
+                      )
+                    : Semantics(
+                        key: ValueKey(estimate),
+                        label: estimate == null
+                            ? 'No estimate yet'
+                            : 'About $estimate ${to?.ticker ?? ''}',
+                        excludeSemantics: true,
+                        child: Text(
+                          estimate == null ? '—' : '≈ $estimate',
+                          style: zuniaSans(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: -0.9,
+                            color: estimate == null ? s.fgDim : s.fg,
+                            tabular: const FontFeature.tabularFigures(),
+                          ),
+                        ),
+                      ),
+              ),
+            ],
+          ),
+          if (where != null || fiat != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                if (where != null)
+                  Expanded(
+                    child: Text(
+                      where,
+                      style: zuniaSans(fontSize: 11.5, color: s.fgMuted),
+                    ),
+                  ),
+                if (fiat != null)
+                  Text(fiat!, style: zuniaMono(fontSize: 11, color: s.fgDim)),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _Fees extends StatelessWidget {
+  const _Fees({required this.view, required this.settings});
+
+  final SwapView view;
+  final SwapSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final from = view.from;
+    final rows = <Widget>[];
+    if (from != null && ChainCatalog.isLoaded) {
+      final entry = ChainCatalog.instance.find(from.chainId);
+      if (entry != null) {
+        final fee = TxEngine.feeFor(
+          entry,
+          (swapReserveGasLimit * defaultGasAdjustment).ceil(),
+          settings.feeSpeed,
+        );
+        final coin = fee.amount.isEmpty ? null : fee.amount.first;
+        rows.add(
+          SwapFact(
+            label: 'Network fee',
+            value: coin == null
+                ? '—'
+                : '≈ ${formatBaseUnitsExact(coin.amount, decimals: entry.feeDecimals, maxFractionDigits: 6)} ${entry.feeDenom}',
+            note: '${settings.feeSpeed.label} speed · an estimate until review',
+          ),
+        );
+      }
+    }
+    final quote = view.quote;
+    if (quote?.poolFee != null && quote!.poolFee!.isFinite) {
+      final fee = quote.poolFee!;
+      rows.add(
+        SwapFact(
+          label: 'Pool fee',
+          value: '${fee.toStringAsFixed(fee >= 1 ? 2 : 3)}%',
+        ),
+      );
+    }
+    final zunia = from == null ? null : swapFeeLine(view.fee, from.identity);
+    if (zunia != null) {
+      // Read as one line: "Zunia fee 0.5% · 0.05 OSMO".
+      rows.add(SwapFact(label: zunia.label, value: zunia.value));
+    }
+    final rate = quote == null || from == null || view.to == null
+        ? null
+        : swapRateLine(
+            quote.inputAmount,
+            from.identity,
+            quote.outputAmount,
+            view.to!.identity,
+          );
+    if (rate != null) rows.add(SwapFact(label: 'Rate', value: rate));
+    // Null stays off the screen: "no impact" and "impact not reported" are
+    // different claims, and the router does not always report one.
+    final impact = quote?.priceImpact;
+    if (settings.routeDetails && impact != null && impact.isFinite) {
+      rows.add(
+        SwapFact(
+          label: 'Price impact',
+          value: '${impact.toStringAsFixed(2)}%',
+          valueColor: impact >= 3
+              ? ZuniaSemanticsExt.of(context).warning
+              : null,
+        ),
+      );
+    }
+    rows.add(SwapFact(label: 'Slippage', value: '${_trim(view.slippage)}%'));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: rows,
+    );
+  }
+
+  String _trim(double value) =>
+      value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+}
+
+/* -------------------------------------------------------------------------- *
+ * Route details
+ * -------------------------------------------------------------------------- */
+
+class _RouteDetails extends ConsumerWidget {
+  const _RouteDetails({required this.view});
+
+  final SwapView view;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ZuniaSemanticsExt.of(context);
+    final registry = ref.watch(interchainRegistryProvider);
+    final from = view.from;
+    final to = view.to;
+    final venueName =
+        view.venue?.label ??
+        registry.get(view.venueChainId)?.chainName ??
+        view.venueChainId;
+    if (from == null || to == null) return const SizedBox.shrink();
+
+    if (view.path != SwapPath.contract) {
+      final routes = view.pool?.quote.routes;
+      return ZuniaCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const ZuniaSectionLabel('Route'),
+            const SizedBox(height: 8),
+            Text(
+              view.path == SwapPath.moveFirst
+                  ? '${from.ticker} moves to Osmosis first, then swaps in its pools.'
+                  : routes == null
+                  ? 'Via Osmosis pools'
+                  : 'Via Osmosis pools: ${poolRouteText(routes)}',
+              style: zuniaSans(fontSize: 13, color: s.fg),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              view.path == SwapPath.pool
+                  ? '${from.ticker} → ${to.ticker}, both on Osmosis · no transfer'
+                  : view.path == SwapPath.poolDeliver
+                  ? 'Then one transfer to ${to.chainName}${view.delivery == null ? '' : ' over ${view.delivery!.sourceChannel}'}'
+                  : 'Send, then swap here',
+              style: zuniaMono(fontSize: 10.5, height: 1.4, color: s.fgMuted),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final plan = view.contract?.plan;
+    final hops = <ZuniaRoutePreviewHop>[];
+    if (plan != null) {
+      var linkIndex = 0;
+      final links = view.contract!.links;
+      for (final hop in plan.hops) {
+        final link = hop.kind == RouteHopKind.swap || linkIndex >= links.length
+            ? null
+            : links[linkIndex];
+        if (hop.kind != RouteHopKind.swap) linkIndex += 1;
+        hops.add(
+          ZuniaRoutePreviewHop(
+            chainId: hop.chainId,
+            chainName: registry.get(hop.chainId)?.chainName,
+            counterpartyChainId: hop.counterpartyChainId,
+            counterpartyChainName: hop.counterpartyChainId == null
+                ? null
+                : registry.get(hop.counterpartyChainId!)?.chainName,
+            channelId: hop.channelId,
+            port: hop.port.isEmpty ? 'transfer' : hop.port,
+            kind: switch (hop.kind) {
+              RouteHopKind.transfer => ZuniaRouteHopKind.transfer,
+              RouteHopKind.forward => ZuniaRouteHopKind.forward,
+              RouteHopKind.swap => ZuniaRouteHopKind.swap,
+            },
+            channelSource: switch (link?.source) {
+              ChannelLinkSource.manual => ZuniaChannelSource.manual,
+              ChannelLinkSource.verified => ZuniaChannelSource.discovered,
+              _ => ZuniaChannelSource.seed,
+            },
+            channelVerified:
+                link?.source == ChannelLinkSource.verified &&
+                link?.state == IbcChannelState.open,
+          ),
+        );
+      }
+    }
+    final contract = view.venue?.contractAddress;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ZuniaRoutePreview(
+          hops: hops,
+          estimatedDurationSeconds: plan?.estimatedDurationSeconds,
+          warnings: view.contract?.warnings ?? const [],
+          requiresPfm: plan?.requiresPfm ?? false,
+          requiresIbcHooks: plan?.requiresIbcHooks ?? false,
+          gasChainName: from.chainName,
+          swapVenueName: venueName,
+          loading: view.planning,
+          error: view.contract?.error,
+          onRetry: () => ref.read(swapControllerProvider.notifier).retry(),
+          emptyTitle: view.liveReads ? 'No route yet' : 'Route planning is off',
+          emptyDescription: view.liveReads
+              ? 'Pick both tokens and an amount, and Zunia will plan the hops.'
+              : 'Turn on live reads in Settings so Zunia can read channels.',
+          compact: true,
+          title: null,
+          footer: from.chainId == view.venueChainId
+              ? null
+              : _ChannelOverrides(
+                  hops: view.contract?.hops ?? const [],
+                  fallback: plan == null
+                      ? [
+                          _HopPair(
+                            index: 0,
+                            fromChainId: from.chainId,
+                            toChainId: view.venueChainId,
+                          ),
+                          if (to.chainId != view.venueChainId)
+                            _HopPair(
+                              index: 1,
+                              fromChainId: view.venueChainId,
+                              toChainId: to.chainId,
+                            ),
+                        ]
+                      : const [],
+                ),
+        ),
+        if (contract != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Verified ${view.venue?.label ?? 'contract'} ${truncateAddress(contract)} on ${view.venueChainId}',
+            style: zuniaMono(fontSize: 10, height: 1.4, color: s.fgDim),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -560,33 +1346,19 @@ class _HopPair {
   final String toChainId;
 }
 
-/// Per-hop channel choice: the discovered options, and a field for the id the
-/// user knows when discovery came back empty.
-class _ChannelOverrides extends StatelessWidget {
-  const _ChannelOverrides({
-    required this.hops,
-    required this.fallback,
-    required this.onChanged,
-    required this.valueFor,
-  });
+/// Per-hop channel choice: the discovered options, and a field for the id
+/// the user knows when discovery came back empty.
+class _ChannelOverrides extends ConsumerWidget {
+  const _ChannelOverrides({required this.hops, required this.fallback});
 
   final List<SwapHopChoice> hops;
-
-  /// Rendered instead of [hops] when no route could be planned at all.
   final List<_HopPair> fallback;
 
-  final void Function(
-    int index,
-    String channelId,
-    String? fromChainId,
-    String? toChainId,
-  ) onChanged;
-  final String? Function(int index) valueFor;
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (hops.isEmpty && fallback.isEmpty) return const SizedBox.shrink();
     final s = ZuniaSemanticsExt.of(context);
+    final controller = ref.read(swapControllerProvider.notifier);
     final pairs = hops.isNotEmpty
         ? [
             for (final hop in hops)
@@ -597,23 +1369,29 @@ class _ChannelOverrides extends StatelessWidget {
               ),
           ]
         : fallback;
-
+    void set(_HopPair pair, String value) => controller.setOverride(
+      pair.index,
+      value,
+      fromChainId: pair.fromChainId,
+      toChainId: pair.toChainId,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: 12),
         const ZuniaSectionLabel('Channels'),
-        const SizedBox(height: 8),
-        if (hops.isEmpty)
+        if (hops.isEmpty) ...[
+          const SizedBox(height: 6),
           Text(
-            'No route found. Enter channel ids if you know them.',
-            style: zuniaMono(fontSize: 10, height: 1.4, color: s.fgMuted),
+            'Nothing has confirmed a path yet. Pick or type the channel for each leg and Zunia will plan again.',
+            style: zuniaSans(fontSize: 12, height: 1.4, color: s.fgMuted),
           ),
+        ],
         for (var i = 0; i < pairs.length; i++) ...[
           const SizedBox(height: 10),
           Text(
             'Hop ${pairs[i].index + 1}',
-            style: zuniaMono(fontSize: 10, color: s.fgMuted),
+            style: zuniaMono(fontSize: 10.5, color: s.fgMuted),
           ),
           const SizedBox(height: 6),
           if (i < hops.length && hops[i].options.isNotEmpty)
@@ -628,47 +1406,35 @@ class _ChannelOverrides extends StatelessWidget {
                       style: zuniaMono(fontSize: 11, color: s.fg),
                     ),
                     selected: option.channelId == hops[i].channelId,
-                    onSelected: (_) => onChanged(
-                      pairs[i].index,
-                      option.channelId,
-                      pairs[i].fromChainId,
-                      pairs[i].toChainId,
-                    ),
+                    onSelected: (_) {
+                      ZuniaHaptics.selection();
+                      set(pairs[i], option.channelId);
+                    },
                     selectedColor: s.stateSelected,
                     backgroundColor: s.glass,
                     side: BorderSide(color: s.line),
                   ),
               ],
-            )
-          else if (i < hops.length)
-            Text(
-              'No channel discovered.',
-              style: zuniaMono(fontSize: 10, height: 1.4, color: s.fgMuted),
             ),
           const SizedBox(height: 8),
           _ChannelField(
             key: ValueKey('swap-hop-${pairs[i].index}-${pairs[i].fromChainId}'),
-            initial: valueFor(pairs[i].index) ?? '',
+            initial: controller.overrideFor(pairs[i].index) ?? '',
             hint: i < hops.length && hops[i].channelId.isNotEmpty
                 ? hops[i].channelId
                 : 'channel-141',
-            onChanged: (value) => onChanged(
-              pairs[i].index,
-              value,
-              pairs[i].fromChainId,
-              pairs[i].toChainId,
-            ),
+            onChanged: (value) => set(pairs[i], value),
             sourceChainId: pairs[i].fromChainId,
             destChainId: pairs[i].toChainId.isEmpty ? null : pairs[i].toChainId,
           ),
-          const SizedBox(height: 6),
         ],
       ],
     );
   }
 }
 
-/// A channel id typed by hand, checked against the source chain as it is typed.
+/// A channel id typed by hand, checked against the source chain as it is
+/// typed.
 class _ChannelField extends ConsumerStatefulWidget {
   const _ChannelField({
     super.key,
@@ -690,8 +1456,9 @@ class _ChannelField extends ConsumerStatefulWidget {
 }
 
 class _ChannelFieldState extends ConsumerState<_ChannelField> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initial);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
   Timer? _debounce;
   IbcChannelCheck? _check;
   bool _checking = false;
@@ -716,7 +1483,9 @@ class _ChannelFieldState extends ConsumerState<_ChannelField> {
     }
     setState(() => _checking = true);
     _debounce = Timer(const Duration(milliseconds: 450), () async {
-      final result = await ref.read(channelServiceProvider).validateIbcChannel(
+      final result = await ref
+          .read(channelServiceProvider)
+          .validateIbcChannel(
             widget.sourceChainId,
             normalized,
             destChainId: widget.destChainId,
@@ -748,7 +1517,7 @@ class _ChannelFieldState extends ConsumerState<_ChannelField> {
             padding: const EdgeInsets.only(top: 6),
             child: Text(
               'Checking…',
-              style: zuniaMono(fontSize: 10, color: s.fgMuted),
+              style: zuniaMono(fontSize: 10.5, color: s.fgMuted),
             ),
           )
         else if (check != null && check.ok)
@@ -756,170 +1525,10 @@ class _ChannelFieldState extends ConsumerState<_ChannelField> {
             padding: const EdgeInsets.only(top: 6),
             child: Text(
               check.message,
-              style: zuniaMono(fontSize: 10, color: s.success),
+              style: zuniaMono(fontSize: 10.5, color: s.success),
             ),
           ),
       ],
-    );
-  }
-}
-
-class _Leg extends StatelessWidget {
-  const _Leg({
-    required this.label,
-    required this.account,
-    required this.available,
-    required this.accounts,
-    required this.onPick,
-    this.controller,
-    this.onAmountChanged,
-    this.estimate,
-  });
-
-  final String label;
-  final ChainAccount account;
-  final String available;
-  final List<ChainAccount> accounts;
-  final ValueChanged<String> onPick;
-  final TextEditingController? controller;
-  final ValueChanged<String>? onAmountChanged;
-
-  /// Pre-formatted expected output. Null renders as an em dash, never as 0.
-  final String? estimate;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = ZuniaSemanticsExt.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: s.surfaceRaisedGradient,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Text(
-                  label.toUpperCase(),
-                  style: zuniaMono(fontSize: 10, color: s.fgMuted),
-                ),
-                const Spacer(),
-                Flexible(
-                  child: Text(
-                    '$available available',
-                    overflow: TextOverflow.ellipsis,
-                    style: zuniaMono(fontSize: 10, color: s.fgMuted),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            // Wrap rather than Row: at 320dp a long denom and a 26pt amount do
-            // not fit on one line, and an overflow here hides the amount.
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 12,
-              runSpacing: 10,
-              children: [
-                PopupMenuButton<String>(
-                  onSelected: onPick,
-                  color: s.surfaceRaised,
-                  position: PopupMenuPosition.under,
-                  tooltip: 'Choose the $label network',
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(color: s.line),
-                  ),
-                  itemBuilder: (_) => [
-                    for (final a in accounts)
-                      PopupMenuItem<String>(
-                        value: a.chain.chainId,
-                        child: Text(
-                          '${a.chain.coinDenom} · ${a.chain.chainName}',
-                          style: zuniaSans(fontSize: 12.5, color: s.fg),
-                        ),
-                      ),
-                  ],
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: s.glass,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(7, 7, 12, 7),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ChainAvatar(chain: account.chain, size: 24),
-                          const SizedBox(width: 8),
-                          Text(
-                            account.chain.coinDenom,
-                            style: zuniaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: s.fg,
-                            ),
-                          ),
-                          Icon(Icons.expand_more, size: 14, color: s.fgMuted),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                if (controller != null)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 120),
-                    child: IntrinsicWidth(
-                      child: TextField(
-                        controller: controller,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        inputFormatters: const [DecimalDigitFormatter()],
-                        textAlign: TextAlign.right,
-                        onChanged: onAmountChanged,
-                        style: zuniaSans(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: -0.9,
-                          color: s.fg,
-                          tabular: FontFeature.tabularFigures(),
-                        ),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          border: InputBorder.none,
-                          hintText: '0.00',
-                          labelText: 'Amount',
-                          floatingLabelBehavior: FloatingLabelBehavior.never,
-                          hintStyle: zuniaSans(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w500,
-                            color: s.fgDim,
-                          ),
-                        ),
-                      ),
-                    ),
-                  )
-                else
-                  Text(
-                    estimate ?? '—',
-                    style: zuniaSans(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: -0.9,
-                      color: estimate == null ? s.fgDim : s.fg,
-                      tabular: FontFeature.tabularFigures(),
-                    ),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
