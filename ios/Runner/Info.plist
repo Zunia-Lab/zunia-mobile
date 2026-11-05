@@ -98,5 +98,14 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<!-- No Firebase token until the user turns notifications on
+	     (FirebasePushTokens enables it then). -->
+	<key>FirebaseMessagingAutoInitEnabled</key>
+	<false/>
+	<!-- Push: let a notification with content-available wake the app. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

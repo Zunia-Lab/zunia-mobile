@@ -65,8 +65,9 @@ class NotificationSettingsScreen extends ConsumerWidget {
         'The system has not allowed notifications from Zunia yet. Turn the '
             'switch on to ask, or allow them in system settings.',
       _ =>
-        'Raised by the app while it runs. Nothing is sent to a server for '
-            'them, and nothing arrives once the system has suspended Zunia.',
+        'While Zunia is closed, its server tells this phone when one of your '
+            'addresses moves. It gets your addresses and a push token, never '
+            'amounts.',
     };
 
     return ZuniaLargeTitleScaffold(

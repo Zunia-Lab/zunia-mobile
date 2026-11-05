@@ -5,6 +5,9 @@
 	<!-- Same as Runner.entitlements, so app links (https://zunialab.com/connect,
 	     /connect/wake, /wc) can be tested in Debug. Needs a team that can
 	     provision Associated Domains; a personal team cannot. -->
+	<!-- Push against the APNs sandbox in Debug. -->
+	<key>aps-environment</key>
+	<string>development</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:zunialab.com</string>

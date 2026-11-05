@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "300954721664",
+    "project_id": "zunia-72ab8",
+    "storage_bucket": "zunia-72ab8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:300954721664:android:f06619579c37c655767565",
+        "android_client_info": {
+          "package_name": "com.zunialab.wallet"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAxloIvBc41pRBEAtNR4_s6EOXrQcBY96Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -10,20 +10,26 @@
 /// ```
 ///
 /// Watching any of them starts the engine; it watches chains only while the
-/// wallet is unlocked with live reads on.
+/// wallet is unlocked with live reads on. The engine's inputs also keep the
+/// push registration in step ([pushRegistrarProvider]), which is what still
+/// reaches the user once the app is closed.
 library;
 
 import 'dart:async';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/activity/activity_model.dart';
+import 'package:zunia_mobile/config/connect_config.dart';
 import 'package:zunia_mobile/notifications/device_alerts.dart';
 import 'package:zunia_mobile/notifications/notice_engine.dart';
 import 'package:zunia_mobile/notifications/notices.dart';
 import 'package:zunia_mobile/notifications/notify_prefs.dart';
+import 'package:zunia_mobile/notifications/push_registration.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/services/chain_reader.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
+import 'package:zunia_mobile/services/push_messaging.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/staking.dart';
@@ -64,8 +70,59 @@ final pendingApprovalsProvider =
   }
 });
 
+/// Keeps Zunia's server told which addresses may wake this device.
+final pushRegistrarProvider = Provider<PushRegistrar>((ref) {
+  final registrar = PushRegistrar(
+    backend: HttpPushBackend(zuniaBackendBase()),
+    tokens: FirebasePushTokens(),
+    store: PrefsPushRecordStore(),
+  );
+  ref.onDispose(() => unawaited(registrar.dispose()));
+  return registrar;
+});
+
+/// Rule 1 of push registration, from the app's state: device notifications
+/// on and allowed by the system, transfers shown, live reads on.
+PushInputs pushInputsOf({
+  required AppPreferences prefs,
+  required NotifyPrefs notify,
+  required AlertPermission permission,
+  required List<ChainAccount> accounts,
+  String locale = 'en',
+}) =>
+    PushInputs(
+      wanted: prefs.alerts &&
+          prefs.liveReads &&
+          notify.transfers &&
+          (permission == AlertPermission.granted ||
+              permission == AlertPermission.provisional),
+      pairs: [
+        for (final account in accounts)
+          PushPair(account.chain.chainId, account.address),
+      ],
+      locale: locale,
+    );
+
 final noticeEngineProvider =
     StateNotifierProvider<NoticeEngine, NoticeFeed>((ref) {
+  final registrar = ref.watch(pushRegistrarProvider);
+  Future<void> register() async {
+    await ref.read(notifyPrefsProvider.notifier).ready;
+    final prefs = ref.read(preferencesProvider);
+    // Before the stored choices are read, "off" would only mean "not yet".
+    if (!prefs.loaded) return;
+    final permission = await ref.read(deviceAlertsProvider).permission();
+    await registrar.sync(
+      pushInputsOf(
+        prefs: ref.read(preferencesProvider),
+        notify: ref.read(notifyPrefsProvider),
+        permission: permission,
+        accounts: ref.read(chainAccountsProvider),
+        locale: PlatformDispatcher.instance.locale.languageCode,
+      ),
+    );
+  }
+
   final engine = NoticeEngine(
     alerts: ref.watch(deviceAlertsProvider),
     // Read the switch on every request rather than rebuilding the engine
@@ -78,8 +135,12 @@ final noticeEngineProvider =
     // with it instead of waiting for a pull to refresh.
     onBalancesMoved: (_) => _readAgain(ref),
     // Back from the background, where the sockets were down: whatever
-    // arrived meanwhile is only in the history.
-    onResumed: () => _readAgain(ref),
+    // arrived meanwhile is only in the history. The system may also have
+    // changed the notification permission meanwhile.
+    onResumed: () {
+      _readAgain(ref);
+      unawaited(register());
+    },
   );
 
   void push() {
@@ -100,6 +161,7 @@ final noticeEngineProvider =
         ),
       ),
     );
+    unawaited(register());
   }
 
   ref.listen(chainAccountsProvider, (_, _) => push());
@@ -119,6 +181,12 @@ final noticeEngineProvider =
     }),
     fireImmediately: true,
   );
+  // A push while the app runs: the system shows nothing, so read that chain
+  // now and let the engine raise its own notice.
+  final pushes = PushMessaging.messages.listen(
+    (event) => engine.remoteActivity(event.chainId),
+  );
+  ref.onDispose(() => unawaited(pushes.cancel()));
   scheduleMicrotask(push);
   return engine;
 });

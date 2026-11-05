@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:zunia_mobile/notifications/device_alerts.dart';
 import 'package:zunia_mobile/notifications/notifications.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
@@ -21,9 +23,13 @@ import 'package:zunia_mobile/screens/tabs/browser_tab.dart';
 import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
 import 'package:zunia_mobile/screens/tabs/home_tab.dart';
 import 'package:zunia_mobile/screens/tabs/swap_tab.dart';
+import 'package:zunia_mobile/services/push_messaging.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_ui/zunia_ui.dart';
+
+/// Set once the notifications prompt was offered after the first unlock.
+const _kNotificationsOffered = 'zunia.push.offered';
 
 /// Root navigation: five destinations in the bar, everything occasional behind
 /// the right-hand drawer.
@@ -79,6 +85,8 @@ class _RootShellState extends ConsumerState<RootShell> {
 
   String _tab = 'home';
   StreamSubscription<dynamic>? _noticeTaps;
+  StreamSubscription<PushEvent>? _pushOpens;
+  Timer? _offerTimer;
 
   @override
   void initState() {
@@ -104,11 +112,49 @@ class _RootShellState extends ConsumerState<RootShell> {
       setState(() => _tab = tab);
       ref.read(noticeTabRequestProvider.notifier).state = null;
     });
+    // A tapped push ("New activity in your wallet"): the feed says what it
+    // was, once that chain has been read again. The one that launched the
+    // app waited for this listener.
+    _pushOpens = PushMessaging.opens.listen(_onPushOpened);
+    final launched = PushMessaging.takePendingOpen();
+    if (launched != null) _onPushOpened(launched);
+    // A moment after the first unlock, so Home is there behind the prompt.
+    _offerTimer = Timer(const Duration(seconds: 2), _offerNotificationsOnce);
+  }
+
+  /// Once, after onboarding and the first unlock: the system prompt for
+  /// notifications, so a transfer reaches this phone while Zunia is closed
+  /// (Android 13 shows nothing without it; iOS only delivers quietly). Never
+  /// again, whatever the answer: Notification settings is where it changes.
+  /// Skipped when the user turned device notifications off in the app.
+  Future<void> _offerNotificationsOnce() async {
+    if (!mounted) return;
+    final prefs = ref.read(preferencesProvider);
+    if (!prefs.loaded || !prefs.alerts) return;
+    if (ref.read(chainAccountsProvider).isEmpty) return;
+    final store = await SharedPreferences.getInstance();
+    if (store.getBool(_kNotificationsOffered) ?? false) return;
+    final permission = await ref.read(deviceAlertsProvider).permission();
+    if (!mounted) return;
+    await store.setBool(_kNotificationsOffered, true);
+    if (permission == AlertPermission.granted ||
+        permission == AlertPermission.unavailable) {
+      return;
+    }
+    await enableDeviceNotifications(ref);
+  }
+
+  void _onPushOpened(PushEvent event) {
+    if (!mounted) return;
+    ref.read(noticeEngineProvider.notifier).remoteActivity(event.chainId);
+    _open(const NotificationsScreen());
   }
 
   @override
   void dispose() {
     _noticeTaps?.cancel();
+    _pushOpens?.cancel();
+    _offerTimer?.cancel();
     super.dispose();
   }
   void _open(Widget screen) {

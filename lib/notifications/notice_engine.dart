@@ -25,12 +25,14 @@
 /// 3. Device notifications need the user's yes. The feed and its unread count
 ///    work regardless.
 ///
-/// Limitation, stated rather than hidden: nothing runs once the system
+/// Limitation, stated rather than hidden: nothing here runs once the system
 /// suspends the app. iOS does that within seconds of leaving it; Android
 /// keeps the process, and so the sockets, a while longer. There is no
-/// background fetch, because a locked wallet has no addresses to read for,
-/// and no push, which needs a server and credentials this build does not
-/// have. The resume check catches up on what arrived meanwhile.
+/// background fetch, because a locked wallet has no addresses to read for.
+/// What reaches a closed app is a push from Zunia's server, for users who
+/// opted in (push_registration.dart); a push that lands while the app runs
+/// reads that chain at once ([NoticeEngine.remoteActivity]). The resume check
+/// catches up on the rest.
 library;
 
 import 'dart:async';
@@ -421,6 +423,15 @@ class NoticeEngine extends StateNotifier<NoticeFeed> {
     } else {
       _refresh();
     }
+  }
+
+  /// Zunia's server says a transaction touched this account on [chainId]: a
+  /// push that arrived while the app runs, or one the user tapped. Read that
+  /// chain again now, as a socket event would; the feed and its device
+  /// notification follow from the history, as for any arrival.
+  void remoteActivity(String? chainId) {
+    if (!mounted || !_inputs.unlocked || !_inputs.liveReads) return;
+    unawaited(_afterChainEvent(chainId ?? ''));
   }
 
   /// History rows the Notifications screen loaded, merged into the feed.

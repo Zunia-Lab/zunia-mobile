@@ -1,8 +1,9 @@
 /// Device notifications: the banner and lock-screen entry for a new notice.
 ///
-/// Local only. The app raises them itself while it runs (the notice engine
-/// decides what is new); nothing comes from a push server, so nothing about
-/// this wallet's addresses leaves the device for it.
+/// The app raises them itself while it runs (the notice engine decides what
+/// is new). While it is closed, the system shows pushes from Zunia's server
+/// instead, on [pushChannel], for users who opted in
+/// (push_registration.dart).
 ///
 /// Permission is never asked at launch. On iOS the engine asks for
 /// *provisional* authorization when it first runs, which shows no prompt and
@@ -95,6 +96,17 @@ const _androidChannel = AndroidNotificationDetails(
   category: AndroidNotificationCategory.status,
 );
 
+/// Where pushes from Zunia's server land on Android while the app is closed.
+/// AndroidManifest.xml names it as Firebase's default channel.
+const pushChannel = AndroidNotificationChannel(
+  'zunia_activity',
+  'Wallet activity',
+  description:
+      'A short notice from Zunia when one of your addresses moves while the '
+      'app is closed.',
+  importance: Importance.high,
+);
+
 class PluginDeviceAlerts implements DeviceAlerts {
   PluginDeviceAlerts([FlutterLocalNotificationsPlugin? plugin])
       : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
@@ -133,6 +145,14 @@ class PluginDeviceAlerts implements DeviceAlerts {
           if (tap != null) _taps.add(tap);
         },
       );
+      if (_android) {
+        // Creating a channel never prompts; it only has to exist before the
+        // first push arrives.
+        await _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.createNotificationChannel(pushChannel);
+      }
       final launch = await _plugin.getNotificationAppLaunchDetails();
       if (launch?.didNotificationLaunchApp ?? false) {
         final tap = AlertTap.decode(launch!.notificationResponse?.payload);
