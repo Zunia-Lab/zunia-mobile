@@ -107,5 +107,9 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<!-- Export compliance, as answered for 0.1.0: no non-exempt encryption.
+	     App Store Connect stops asking for every build. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
