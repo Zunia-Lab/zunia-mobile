@@ -67,7 +67,7 @@ The full EN/FR asset set (texts, screenshots from a funded demo wallet, every st
 5. **Questionnaires.**
    - **App Privacy:** Data Not Collected, which matches `ios/Runner/PrivacyInfo.xcprivacy`. On iOS the QR scanner uses Apple's Vision framework, not ML Kit.
    - **Age rating:** answer **Unrestricted Web Access: Yes**, because the built-in browser opens any site.
-   - **Export compliance:** the app uses standard encryption (the vault and the end-to-end encrypted connect messages). Answer the questions in App Store Connect. Once the answer is settled, add `ITSAppUsesNonExemptEncryption` to `Info.plist` so App Store Connect stops asking for every build.
+   - **Export compliance:** the app uses standard encryption (the vault and the end-to-end encrypted connect messages). The answer given for 0.1.0 is "App Uses Non-Exempt Encryption: No", and `ios/Runner/Info.plist` sets `ITSAppUsesNonExemptEncryption` to `false`, so App Store Connect no longer asks for each build (from build 6 on).
 6. **Review notes.** Paste this:
    > Zunia is a self-custody wallet: there is no account or login. On first launch, tap "Create a new wallet", accept the two safety statements, and choose a password. Zunia never holds user funds and has no in-app purchases; the 0.5% swap fee is shown before each swap and paid on-chain. To try connecting a website: on a computer, open https://app.zunialab.com, choose Connect wallet → Zunia Mobile, and scan the code with the scan button at the top of Zunia's home screen.
 7. **Universal links, once the team is final.**
