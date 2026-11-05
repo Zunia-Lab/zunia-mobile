@@ -13,6 +13,8 @@ import 'package:zunia_mobile/screens/tabs/swap_tab.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/swap/swap_path.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/swap_assets.dart';
 import 'package:zunia_mobile/swap/xcs_routes.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -40,6 +42,7 @@ void main() {
     Size size = const Size(320, 640),
     double textScale = 1,
     List<String> enabled = const ['cosmoshub-4', 'osmosis-1'],
+    EntryPointCheck entryPoint = const EntryPointCheck.ready(),
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
@@ -47,7 +50,12 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final container = ProviderContainer(
       overrides: [
-        ...swapOverrides(holdings: holdings, venue: venue, enabled: enabled),
+        ...swapOverrides(
+          holdings: holdings,
+          venue: venue,
+          enabled: enabled,
+          entryPoint: entryPoint,
+        ),
         ...extra,
       ],
     );
@@ -177,9 +185,33 @@ void main() {
   );
 
   testWidgets(
-    'a pair the contract cannot swap from another chain offers step 1 of 2, not Review',
+    'a pair from another chain swaps in one signature: Review, no two steps',
     (tester) async {
       final c = await pumpSwap(tester);
+      pick(
+        c,
+        'cosmoshub-4:uatom',
+        'osmosis-1:ibc/794C7D7F3B857713878A3A1927251FA6AC1EEE520424C1F6FAFE9BA26D476138',
+      );
+      await tester.pump();
+      await typeAmount(tester, '1');
+      expect(c.read(swapViewProvider).path, SwapPath.oneSignature);
+      expect(find.widgetWithText(ZuniaButton, 'Review swap'), findsOneWidget);
+      expect(
+        find.widgetWithText(ZuniaButton, 'Move to Osmosis'),
+        findsNothing,
+      );
+      expect(find.text('Two steps'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'without a confirmed entry point, a pair the contract cannot swap from another chain offers step 1 of 2, not Review',
+    (tester) async {
+      final c = await pumpSwap(
+        tester,
+        entryPoint: const EntryPointCheck.unavailable(entryPointMismatch),
+      );
       pick(
         c,
         'cosmoshub-4:uatom',
@@ -210,6 +242,7 @@ void main() {
       final c = await pumpSwap(
         tester,
         venue: off,
+        entryPoint: const EntryPointCheck.unavailable(entryPointMismatch),
         extra: [xcsRouteTableProvider.overrideWith((_) async => null)],
       );
       pick(c, 'cosmoshub-4:uatom', 'osmosis-1:uosmo');

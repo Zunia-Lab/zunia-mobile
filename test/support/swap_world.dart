@@ -18,6 +18,7 @@ import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/osmosis_assets.dart';
 import 'package:zunia_mobile/swap/swap_assets.dart';
 import 'package:zunia_mobile/swap/swap_data.dart';
@@ -158,6 +159,27 @@ Object? routerAnswer(String path, Map<String, Object?> query) {
       'in_base_out_quote_spot_price': '0.5',
     };
   }
+  if (path == '/router/quote' && '${query['singleRoute']}' == 'true') {
+    return {
+      'amount_in': {
+        'denom': tokenIn.substring('$amount'.length),
+        'amount': '$amount',
+      },
+      'amount_out': '$out',
+      'route': [
+        {
+          'pools': [
+            {'id': 3498, 'token_out_denom': query['tokenOutDenom']},
+          ],
+          'in_amount': '$amount',
+          'out_amount': '$out',
+        },
+      ],
+      'effective_fee': '0.002',
+      'price_impact': '-0.0004',
+      'in_base_out_quote_spot_price': '0.5',
+    };
+  }
   if (path == '/router/quote') {
     final first = amount * BigInt.from(6) ~/ BigInt.from(10);
     return {
@@ -202,6 +224,7 @@ List<Override> swapOverrides({
   SwapVenueStatus? venue,
   List<String> enabled = const ['cosmoshub-4', 'osmosis-1'],
   SwapData? swapData,
+  EntryPointCheck entryPoint = const EntryPointCheck.ready(),
 }) {
   final addresses = {
     'cosmoshub-4': hubMe,
@@ -237,6 +260,7 @@ List<Override> swapOverrides({
             label: 'CrossChainSwaps v1.2',
           ),
     ),
+    entryPointStatusProvider.overrideWith((_) async => entryPoint),
     swapAddressResolverProvider.overrideWithValue((id) => addresses[id]),
     lcdFactoryProvider.overrideWithValue(
       (c) => ScriptedLcd(c.chainId, (p, q) => chainAnswer(c.chainId, p, q)),
@@ -263,6 +287,7 @@ ProviderContainer world({
   SwapVenueStatus? venue,
   List<String> enabled = const ['cosmoshub-4', 'osmosis-1'],
   SwapData? swapData,
+  EntryPointCheck entryPoint = const EntryPointCheck.ready(),
 }) {
   final container = ProviderContainer(
     overrides: swapOverrides(
@@ -272,6 +297,7 @@ ProviderContainer world({
       venue: venue,
       enabled: enabled,
       swapData: swapData,
+      entryPoint: entryPoint,
     ),
   );
   addTearDown(container.dispose);
@@ -288,6 +314,7 @@ Future<SwapView> settle(ProviderContainer c) async {
   await c.read(swapHoldingsProvider.future);
   await c.read(osmosisSwapAssetsProvider.future);
   await c.read(swapVenueStatusProvider.future);
+  await c.read(entryPointStatusProvider.future);
   await c.read(xcsRouteTableProvider.future);
   return c.read(swapViewProvider);
 }

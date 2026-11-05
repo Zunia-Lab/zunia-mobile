@@ -542,6 +542,21 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
         ),
       );
     }
+    if (view.path == SwapPath.oneSignature && from != null && to != null) {
+      add(
+        Text(
+          'One signature on ${from.chainName}: your ${from.ticker} goes to Osmosis, is swapped there and '
+          '${to.chainId == view.venueChainId ? 'paid to your Osmosis address' : 'sent on to your address on ${to.chainName}'}. '
+          'No OSMO needed. If the swap fails on Osmosis, your ${from.ticker} comes back'
+          '${view.fee != null && view.fee!.charged ? ', but the ${feeRateText(view.fee!.bps)} Zunia fee does not' : ''}.',
+          style: zuniaSans(
+            fontSize: 12,
+            height: 1.45,
+            color: ZuniaSemanticsExt.of(context).fgMuted,
+          ),
+        ),
+      );
+    }
     if (view.fee != null &&
         view.fee!.charged &&
         view.path == SwapPath.contract &&
@@ -1031,7 +1046,8 @@ class _ReceiveCard extends StatelessWidget {
         : swapAmountText(quote.outputAmount, to.identity);
     final where = to == null
         ? null
-        : view.path == SwapPath.poolDeliver
+        : view.path == SwapPath.poolDeliver ||
+              view.path == SwapPath.oneSignature
         ? 'Swapped on Osmosis, delivered on ${to.chainName}'
         : 'Delivered on ${to.chainName}';
     return _Card(
@@ -1230,6 +1246,9 @@ class _RouteDetails extends ConsumerWidget {
                   ? '${from.ticker} → ${to.ticker}, both on Osmosis · no transfer'
                   : view.path == SwapPath.poolDeliver
                   ? 'Then one transfer to ${to.chainName}${view.delivery == null ? '' : ' over ${view.delivery!.sourceChannel}'}'
+                  : view.path == SwapPath.oneSignature
+                  ? 'One transfer from ${from.chainName}${view.inbound == null ? '' : ' over ${view.inbound!.channelId}'}, swapped on Osmosis by the Skip Go entry point'
+                        '${to.chainId == view.venueChainId ? '' : ', then sent to ${to.chainName}${view.delivery == null ? '' : ' over ${view.delivery!.sourceChannel}'}'}'
                   : 'Send, then swap here',
               style: zuniaMono(fontSize: 10.5, height: 1.4, color: s.fgMuted),
             ),

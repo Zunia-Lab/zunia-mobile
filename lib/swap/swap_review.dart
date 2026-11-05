@@ -12,7 +12,9 @@
 /// Message order, the same as the extension:
 /// - contract path: `[swap, fee?]`, the swap being a `MsgTransfer` whose memo
 ///   calls the contract, or a `MsgExecuteContract` on Osmosis;
-/// - pools: `[poolmanager swap, fee?, MsgTransfer?]`.
+/// - pools: `[poolmanager swap, fee?, MsgTransfer?]`;
+/// - one signature: `[MsgTransfer, fee?]`, the transfer's memo calling Skip
+///   Go's entry point (`one_signature.dart`).
 ///
 /// With no fee due the transaction is exactly the swap's own messages, byte
 /// for byte what it was before the commission existed.
@@ -25,6 +27,7 @@ import 'package:flutter/foundation.dart';
 import 'package:zunia_mobile/services/interchain/memo.dart';
 import 'package:zunia_mobile/services/interchain/swap.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/pool_swap.dart';
 import 'package:zunia_mobile/swap/swap_amounts.dart';
 import 'package:zunia_mobile/swap/swap_assets.dart';
@@ -326,6 +329,89 @@ final class PoolSwapReview extends SwapReview {
   );
 }
 
+/// A swap in one signature through Skip Go's entry point: a transfer to
+/// Osmosis whose memo swaps along [route] for at least [minOut] and pays the
+/// output on Osmosis or sends it on over [delivery]. The floor and the swap
+/// window are in the memo, so a new price is a new message.
+final class EntryPointSwapReview extends SwapReview {
+  const EntryPointSwapReview({
+    required super.id,
+    required super.from,
+    required super.to,
+    required super.amountUnits,
+    required super.fee,
+    required super.planKey,
+    required super.signer,
+    required super.recipient,
+    required super.price,
+    required this.inbound,
+    required this.venueOutputDenom,
+    required this.slippagePercent,
+    required this.route,
+    required this.minOut,
+    required this.delivery,
+    required this.recoveryAddress,
+    this.entryPoint = kSkipEntryPoint,
+  });
+
+  /// The hop to Osmosis the transfer takes.
+  final VenueInbound inbound;
+
+  /// What the swap buys, as Osmosis names it.
+  final String venueOutputDenom;
+  final double slippagePercent;
+
+  /// The router's one route for `fee.net`.
+  final PoolRoute route;
+
+  /// The memo's `min_asset`.
+  final String minOut;
+
+  /// The checked channel the output leaves Osmosis by; null when it is paid on
+  /// Osmosis.
+  final PoolDelivery? delivery;
+
+  /// This wallet's address on Osmosis: where a failed delivery lands.
+  final String recoveryAddress;
+  final String entryPoint;
+
+  @override
+  SwapPath get path => SwapPath.oneSignature;
+
+  /// What the entry point does with the output.
+  EntryPointPost get post => delivery == null
+      ? EntryPointPayOnVenue(recipient)
+      : EntryPointDeliver(
+          sourceChannel: delivery!.sourceChannel,
+          receiver: recipient,
+          recoverAddress: recoveryAddress,
+        );
+
+  EntryPointSwapReview withPrice({
+    required SwapPrice price,
+    required PoolRoute route,
+    required String minOut,
+  }) => EntryPointSwapReview(
+    id: id,
+    from: from,
+    to: to,
+    amountUnits: amountUnits,
+    fee: fee,
+    planKey: planKey,
+    signer: signer,
+    recipient: recipient,
+    price: price,
+    inbound: inbound,
+    venueOutputDenom: venueOutputDenom,
+    slippagePercent: slippagePercent,
+    route: route,
+    minOut: minOut,
+    delivery: delivery,
+    recoveryAddress: recoveryAddress,
+    entryPoint: entryPoint,
+  );
+}
+
 /* -------------------------------------------------------------------------- *
  * The messages
  * -------------------------------------------------------------------------- */
@@ -470,6 +556,48 @@ List<TxMsg> poolSwapTxMsgs({
         sender: sender,
         receiver: recipient,
         timeoutTimestampNanos: ibcTimeoutNanos(now, timeoutMinutes),
+      ),
+    );
+  }
+  return msgs;
+}
+
+/// What a one-signature swap signs, in order: the transfer of what is left
+/// after the fee to the entry point, its memo carrying the swap, then the bank
+/// send that pays the fee, when one is due. The packet may take
+/// [entryPointPacketTimeoutMinutes] to reach Osmosis; the swap itself is
+/// accepted for [entryPointSwapWindowMinutes].
+List<TxMsg> entryPointSwapTxMsgs(EntryPointSwapReview review, DateTime now) {
+  final memo = buildEntryPointMemo(
+    inputDenom: review.inbound.arrivalDenom,
+    route: review.route,
+    outputDenom: review.venueOutputDenom,
+    minOut: review.minOut,
+    timeoutNanos: entryPointTimeoutNanos(now, entryPointSwapWindowMinutes),
+    post: review.post,
+    entryPoint: review.entryPoint,
+  );
+  final msgs = <TxMsg>[
+    TxMsg.transfer(
+      sourcePort: review.inbound.port,
+      sourceChannel: review.inbound.channelId,
+      token: TxCoin(review.from.denom, review.fee.net.toString()),
+      sender: review.signer,
+      receiver: review.entryPoint,
+      timeoutTimestampNanos: ibcTimeoutNanos(
+        now,
+        entryPointPacketTimeoutMinutes,
+      ),
+      memo: memo,
+    ),
+  ];
+  if (review.fee.charged) {
+    msgs.add(
+      buildSwapFeeMsg(
+        sender: review.signer,
+        recipient: review.fee.recipient!,
+        denom: review.from.denom,
+        amount: review.fee.fee,
       ),
     );
   }
@@ -971,6 +1099,116 @@ List<String> poolSwapTermsProblems(
   return problems;
 }
 
+/// Everything a one-signature swap's transaction does that the review did not
+/// say; any of it refuses the signature. The transfer and its memo are read
+/// back from the messages themselves.
+List<String> entryPointTermsProblems(
+  EntryPointSwapReview review, {
+  required String chainId,
+  required List<TxMsg> msgs,
+  required SwapFeePolicy policy,
+  required SwapTokenBook book,
+  required DateTime now,
+  required String venueChainId,
+}) {
+  final transfer = readDeliveryTransfer(msgs.first);
+  if (transfer == null) return const [unreadableSwap];
+  final rest = msgs.sublist(1);
+  final feeMsg = rest.isNotEmpty && rest.first.typeUrl == bankSendTypeUrl
+      ? rest.first
+      : null;
+  final afterFee = feeMsg != null ? rest.sublist(1) : rest;
+  if (afterFee.isNotEmpty) return const [extraMessages];
+  final memo = readEntryPointMemo(transfer.memo);
+  if (memo == null) return const [unreadableSwap];
+
+  final from = review.from;
+  final to = review.to;
+  final signer = review.signer;
+  final problems = <String>[];
+  if (chainId != from.chainId) {
+    problems.add(
+      'This swap signs on ${from.chainName}, and this transaction would sign on $chainId.',
+    );
+  }
+  if (transfer.sender != signer) {
+    problems.add(
+      'The transfer would leave ${_short(transfer.sender)}, not the account signing it.',
+    );
+  }
+  if (transfer.token.denom != from.denom) {
+    problems.add(
+      'The transfer sends ${_shortDenom(transfer.token.denom)}, not the ${from.ticker} on ${from.chainName} you reviewed.',
+    );
+  } else if (transfer.token.amount != review.fee.net.toString()) {
+    problems.add(
+      'The transfer sends ${swapTickerAmount(transfer.token.amount, from.identity)}, not the ${swapTickerAmount(review.fee.net, from.identity)} you reviewed.',
+    );
+  }
+  if (transfer.sourcePort != review.inbound.port ||
+      transfer.sourceChannel != review.inbound.channelId) {
+    problems.add(
+      'The transfer leaves over ${transfer.sourceChannel}, not over ${review.inbound.channelId}, the channel to Osmosis Zunia checked.',
+    );
+  }
+  if (transfer.receiver != kSkipEntryPoint ||
+      review.entryPoint != kSkipEntryPoint ||
+      memo.contract != kSkipEntryPoint) {
+    problems.add(
+      'The transfer goes to ${_short(transfer.receiver)}, not to the swap contract on Osmosis this release checked.',
+    );
+  }
+  final nowNanos = BigInt.from(now.microsecondsSinceEpoch) * BigInt.from(1000);
+  if (BigInt.parse(transfer.timeoutTimestamp) <= nowNanos ||
+      memo.timeoutNanos <= nowNanos) {
+    problems.add(
+      'The swap window has already closed, so the tokens would only come back. Refresh the price.',
+    );
+  }
+  if (memo.venue != kSkipSwapVenue ||
+      !listEquals(
+        memo.operations,
+        entryPointOperations(review.inbound.arrivalDenom, review.route),
+      )) {
+    problems.add(
+      'The swap would go through other pools, or other tokens, than the route you reviewed.',
+    );
+  }
+  final expected = to.chainId == venueChainId
+      ? to.denom
+      : to.identity.osmosisDenom;
+  if (memo.minDenom != review.venueOutputDenom ||
+      (expected != null && expected != memo.minDenom)) {
+    problems.add(
+      'The swap would buy ${book.identityOf(venueChainId, memo.minDenom).ticker}, not the ${to.ticker} you picked.',
+    );
+  }
+  final bought = book.identityOf(venueChainId, review.venueOutputDenom);
+  if (memo.minAmount != review.minOut) {
+    problems.add(
+      "The swap's minimum is ${swapTickerAmount(memo.minAmount, bought)}, not the ${swapTickerAmount(review.minOut, bought)} you reviewed.",
+    );
+  }
+  if (memo.post != review.post) {
+    problems.add(
+      review.delivery == null
+          ? 'The swap would pay someone other than your address on Osmosis.'
+          : 'The swap would send its output somewhere other than your address on ${to.chainName}, or name another recovery address.',
+    );
+  }
+  problems.addAll(
+    _feeProblems(
+      review: review,
+      feeMsg: feeMsg,
+      chainId: chainId,
+      signer: signer,
+      policy: policy,
+      book: book,
+    ),
+  );
+  return problems;
+}
+
 /// Every problem with [msgs] as the transaction [review] signs, re-read from
 /// the messages; empty when they are exactly what the review shows.
 List<String> reviewProblems(
@@ -1005,6 +1243,15 @@ List<String> reviewProblems(
       now: now,
       venueChainId: venueChainId,
     ),
+    EntryPointSwapReview() => entryPointTermsProblems(
+      review,
+      chainId: chainId,
+      msgs: msgs,
+      policy: policy,
+      book: book,
+      now: now,
+      venueChainId: venueChainId,
+    ),
   };
 }
 
@@ -1026,6 +1273,7 @@ class LiveSwap {
     required this.planFingerprint,
     required this.delivery,
     required this.blockedReason,
+    this.inbound,
   });
 
   final SwapAsset? from;
@@ -1044,6 +1292,9 @@ class LiveSwap {
   /// The pool path's checked transfer leg.
   final PoolDelivery? delivery;
   final String? blockedReason;
+
+  /// The one-signature path's checked hop to Osmosis.
+  final VenueInbound? inbound;
 }
 
 /// What a plan would have signed, without the per-build packet timeout.
@@ -1110,6 +1361,16 @@ String? reviewDrift(SwapReview review, LiveSwap live) {
       }
       if (current != delivery) {
         return 'Zunia planned the transfer again, and it is not the one you reviewed.';
+      }
+      return null;
+    case EntryPointSwapReview(:final inbound, :final delivery):
+      if (live.planning) return 'Zunia is checking the route again.';
+      if (live.inbound == null) {
+        return live.blockedReason ??
+            'The route to Osmosis you reviewed is no longer offered.';
+      }
+      if (live.inbound != inbound || live.delivery != delivery) {
+        return 'Zunia planned the route again, and it is not the one you reviewed.';
       }
       return null;
   }
@@ -1180,7 +1441,22 @@ String swapFeeOutcome(SwapReview review) {
       return poolPath == SwapPath.pool
           ? 'The swap and the fee are one transaction: if the swap fails, no fee is taken.'
           : 'The swap, the fee and the transfer are one transaction: if the swap would pay less than the minimum, none of them happens.';
+    case EntryPointSwapReview():
+      return entryPointOutcome(review);
   }
+}
+
+/// What happens when a one-signature swap does not go through: the swap is
+/// refused and the tokens come back, the fee does not; a failed delivery after
+/// the swap pays the user's Osmosis address.
+String entryPointOutcome(EntryPointSwapReview review) {
+  final rate = review.fee.bps > 0 ? ' ${feeRateText(review.fee.bps)}' : '';
+  final fee = review.fee.charged ? ', but the$rate Zunia fee does not' : '';
+  final back =
+      'If the swap fails on Osmosis (the price moved past your minimum, or the swap window closed), it is refused and your ${review.from.ticker} comes back to your address on ${review.from.chainName}$fee.';
+  return review.delivery == null
+      ? back
+      : '$back If the delivery to ${review.to.chainName} fails after the swap, the ${review.to.ticker} lands on your Osmosis address.';
 }
 
 /// The form's fee line: `Zunia fee` and `0.5% · 0.05 OSMO`. Null when no fee

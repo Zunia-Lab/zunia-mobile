@@ -24,6 +24,7 @@ import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/pool_swap.dart';
 import 'package:zunia_mobile/swap/swap_amounts.dart';
 import 'package:zunia_mobile/swap/swap_data.dart';
@@ -285,6 +286,28 @@ class _SwapReviewScreenState extends ConsumerState<SwapReviewScreen> {
           ),
           result: true,
         );
+      case EntryPointSwapReview():
+        // One transfer carries the swap: follow its packet to Osmosis, the
+        // swap there, and the delivery after it. Nothing to recover by hand:
+        // a refused swap comes back on its own, a failed delivery lands on the
+        // recovery address.
+        return navigator.pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => PacketStatusScreen(
+              plan: entryPointRoutePlan(
+                from: review.from,
+                to: review.to,
+                inbound: review.inbound,
+                deliveryChannel: review.delivery?.sourceChannel,
+                memo: _quote.memo,
+                venueChainId: data.venueChainId,
+              ),
+              sourceTxHash: hash,
+              expectedAmount: review.fee.net.toString(),
+            ),
+          ),
+          result: true,
+        );
     }
   }
 
@@ -488,6 +511,20 @@ class _SummaryCard extends StatelessWidget {
               : 'Delivered on ${to.chainName}';
           minimum = null;
         }
+      case EntryPointSwapReview(:final minOut, :final venueOutputDenom):
+        final bought = data.book.identityOf(
+          data.venueChainId,
+          venueOutputDenom,
+        );
+        receive = price == null
+            ? '—'
+            : '≈ ${swapTickerAmount(price.outputAmount, to.identity)}';
+        receiveLine = 'Delivered on ${to.chainName} · one signature';
+        minimum = (
+          value: swapTickerAmount(minOut, bought),
+          note:
+              'Osmosis refuses the swap below this, and your ${from.ticker} comes back.',
+        );
     }
     final rate = price == null
         ? null
@@ -716,6 +753,34 @@ class _Details extends StatelessWidget {
           );
           rows.add(_Copyable(label: 'Pays out to', value: review.recipient));
         }
+      case final EntryPointSwapReview entry:
+        rows.add(
+          SwapFact(
+            label: 'To Osmosis over',
+            value: entry.inbound.channelId,
+          ),
+        );
+        rows.add(SwapFact(label: 'Route', value: poolRouteText([entry.route])));
+        rows.add(
+          _Copyable(
+            label: 'Packet receiver',
+            value: entry.entryPoint,
+            note:
+                '$kSkipEntryPointLabel on Osmosis (Skip Go, no admin), checked on chain',
+          ),
+        );
+        if (entry.delivery != null) {
+          rows.add(
+            SwapFact(
+              label: 'Then sent over',
+              value: entry.delivery!.sourceChannel,
+            ),
+          );
+        }
+        rows.add(_Copyable(label: 'Pays out to', value: entry.recipient));
+        rows.add(
+          _Copyable(label: 'Recovery address', value: entry.recoveryAddress),
+        );
     }
     final summaries = quote.preview.summaries;
     return Theme(

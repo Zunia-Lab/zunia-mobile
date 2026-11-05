@@ -264,6 +264,34 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     setState(() => _amount.text = percentText(spendable, percent, scale));
   }
 
+  /// Route previews whose channels were sent to be checked, and those still
+  /// being checked. One check per path for the screen's life; the planner
+  /// keeps each answer for the session.
+  final Set<String> _previewAsked = {};
+  final Set<String> _previewChecking = {};
+
+  static String _previewKey(RoutePath path) => [
+    for (final link in path.links)
+      '${link.sourceChainId}>${link.destChainId}:${link.channelId}',
+  ].join('|');
+
+  /// Check the preview route's channels as soon as both networks are known,
+  /// whatever the amount: the route says verified, or not verified once a
+  /// check failed, never "not verified" for a channel nobody looked at yet.
+  void _checkPreview(RoutePath path) {
+    final key = _previewKey(path);
+    if (!_previewAsked.add(key)) return;
+    final planner = ref.read(transferPlannerProvider);
+    if (planner.pathChecked(path)) return;
+    _previewChecking.add(key);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (mounted) setState(() {});
+      await planner.checkPath(path);
+      if (!mounted) return;
+      setState(() => _previewChecking.remove(key));
+    });
+  }
+
   /// Plans after the user stops typing; an answer for inputs that have since
   /// changed is never shown as the current route.
   void _schedulePlan(String key, PlanInput input) {
@@ -376,6 +404,12 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         ? null
         : sortedDest.firstWhere((a) => a.chain.chainId == _destChainId, orElse: () => sortedDest.first);
     final dest = destAccount?.chain;
+    final previewPath = dest == null ? null : reach[dest.chainId];
+    if (_cross && prefs.liveReads && previewPath != null) {
+      _checkPreview(previewPath);
+    }
+    final previewChecking =
+        previewPath != null && _previewChecking.contains(_previewKey(previewPath));
     final selfOnDest = destAccount?.address;
     final usingSelf = _cross && !_otherAddress && (selfOnDest ?? '').isNotEmpty;
     final expectedPrefix = _cross ? dest?.bech32Prefix : chain.bech32Prefix;
@@ -589,9 +623,11 @@ class _SendScreenState extends ConsumerState<SendScreen> {
               planning: planning,
               liveReads: prefs.liveReads,
               userPins: _pins,
-              previewPath: reach[dest.chainId],
+              previewPath: previewPath,
+              previewChecking: previewChecking,
               onRetry: () => setState(() {
                 planner.reset();
+                _previewAsked.clear();
                 _retry += 1;
               }),
               onEdit: () => _editRoute(chain, dest),
@@ -1175,6 +1211,7 @@ class _RouteSection extends ConsumerWidget {
     required this.liveReads,
     required this.userPins,
     required this.previewPath,
+    this.previewChecking = false,
     required this.onRetry,
     required this.onEdit,
   });
@@ -1186,6 +1223,10 @@ class _RouteSection extends ConsumerWidget {
   final bool liveReads;
   final List<ManualChannel> userPins;
   final RoutePath? previewPath;
+
+  /// The preview route's channels are being checked: drawn neutral, never as
+  /// unverified, until the chain answers.
+  final bool previewChecking;
   final VoidCallback onRetry;
   final VoidCallback onEdit;
 
@@ -1213,7 +1254,7 @@ class _RouteSection extends ConsumerWidget {
       warnings: warnings,
       requiresPfm: best?.plan.requiresPfm ?? false,
       gasChainName: source.chainName,
-      loading: planning && best == null,
+      loading: best == null && (planning || previewChecking),
       error: plan?.error,
       onRetry: onRetry,
       emptyTitle: 'No route yet',

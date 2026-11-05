@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zunia_mobile/services/interchain/denom.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/pool_swap.dart';
 import 'package:zunia_mobile/swap/swap_data.dart';
 import 'package:zunia_mobile/swap/swap_fee.dart';
@@ -24,6 +25,10 @@ import 'package:zunia_mobile/tx/tx_msg.dart';
 
 import 'support/swap_fixtures.dart';
 import 'support/swap_world.dart';
+
+/// The chain does not confirm Skip Go's entry point: the pairs it would take go
+/// the ways they went before it.
+const entryOff = EntryPointCheck.unavailable(entryPointMismatch);
 
 void main() {
   setUpAll(loadSwapWorld);
@@ -77,10 +82,30 @@ void main() {
     }
 
     test(
-      'funds elsewhere go through the contract when its table has the pair',
+      'funds one hop from Osmosis swap in one signature, whatever the route table holds',
+      () async {
+        final inTable = await pick(
+          world(),
+          'cosmoshub-4:uatom',
+          'osmosis-1:uosmo',
+        );
+        expect(inTable.to!.executable, Executable.yes);
+        expect(inTable.path, SwapPath.oneSignature);
+        final notInTable = await pick(
+          world(),
+          'cosmoshub-4:uatom',
+          'osmosis-1:$usdcInj',
+        );
+        expect(notInTable.to!.executable, Executable.no);
+        expect(notInTable.path, SwapPath.oneSignature);
+      },
+    );
+
+    test(
+      'without a confirmed entry point, funds elsewhere go through the contract when its table has the pair',
       () async {
         final view = await pick(
-          world(),
+          world(entryPoint: entryOff),
           'cosmoshub-4:uatom',
           'osmosis-1:uosmo',
         );
@@ -90,10 +115,10 @@ void main() {
     );
 
     test(
-      'funds elsewhere move to Osmosis first when the contract cannot swap the pair',
+      'without a confirmed entry point, funds elsewhere move to Osmosis first when the contract cannot swap the pair',
       () async {
         final view = await pick(
-          world(),
+          world(entryPoint: entryOff),
           'cosmoshub-4:uatom',
           'osmosis-1:$usdcInj',
         );
@@ -101,6 +126,17 @@ void main() {
         expect(view.path, SwapPath.moveFirst);
       },
     );
+
+    test('one signature waits for the entry point check, never guesses', () async {
+      final c = world();
+      await settle(c);
+      c.read(swapControllerProvider.notifier)
+        ..pickFrom('cosmoshub-4:uatom')
+        ..pickTo('osmosis-1:uosmo');
+      final view = c.read(swapViewProvider);
+      expect(view.entryPoint?.ready, isTrue);
+      expect(view.path, SwapPath.oneSignature);
+    });
 
     test(
       'funds on Osmosis swap in the pools, or through the contract when it delivers elsewhere',
@@ -241,7 +277,7 @@ void main() {
         final off = const SwapVenueStatus.unavailable(
           'No crosschain-swaps contract this release names exists on Osmosis.',
         );
-        final c = world(venue: off, tableGiven: false);
+        final c = world(venue: off, tableGiven: false, entryPoint: entryOff);
         await settle(c);
         final controller = c.read(swapControllerProvider.notifier)
           ..pickFrom('cosmoshub-4:uatom')
@@ -377,9 +413,135 @@ void main() {
     );
 
     test(
-      'contract from another chain: [MsgTransfer to the contract with the swap memo, fee on that chain]',
+      'one signature: [MsgTransfer to the entry point with the swap memo, fee on that chain]',
       () async {
         final c = world();
+        final view = await plan(
+          c,
+          from: 'cosmoshub-4:uatom',
+          to: 'osmosis-1:uosmo',
+          amount: '1',
+        );
+        expect(view.path, SwapPath.oneSignature);
+        expect(view.ready, isTrue, reason: view.blockedReason ?? '');
+        expect(view.inbound?.channelId, 'channel-141');
+        final at = DateTime.now();
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view, now: at);
+        final msgs = prepared.msgs;
+        expect(msgs.map((m) => m.typeUrl), [transferTypeUrl, bankSendTypeUrl]);
+        final transfer = msgs[0].value;
+        expect(transfer['source_channel'], 'channel-141');
+        expect(transfer['sender'], hubMe);
+        expect(transfer['token'], {'denom': 'uatom', 'amount': '995000'});
+        // ibc-hooks runs only when the ICS20 receiver is the contract.
+        expect(transfer['receiver'], kSkipEntryPoint);
+        final memo = transfer['memo'] as String;
+        // The swap window is a bare JSON number, never a string.
+        expect(
+          RegExp(r'"timeout_timestamp":\d{19},').hasMatch(memo),
+          isTrue,
+          reason: memo,
+        );
+        final facts = readEntryPointMemo(memo)!;
+        expect(facts.contract, kSkipEntryPoint);
+        expect(facts.venue, 'osmosis-poolmanager');
+        // The router's one route, each pool taking what the previous paid.
+        expect(facts.operations, const [
+          EntryPointOperation('3498', atomOnOsmosis, 'uosmo'),
+        ]);
+        expect(facts.minDenom, 'uosmo');
+        // 0.995 ATOM priced at 0.4975 OSMO, floor 1% under.
+        expect(facts.minAmount, '492525');
+        expect(facts.post, EntryPointPayOnVenue(osmoMe));
+        expect(
+          facts.timeoutNanos,
+          entryPointTimeoutNanos(at, entryPointSwapWindowMinutes),
+        );
+        // Zunia's fee: the same separate bank send on the signing chain.
+        expect(msgs[1].value, {
+          'from_address': hubMe,
+          'to_address': data.fees.recipients['cosmoshub-4'],
+          'amount': [
+            {'denom': 'uatom', 'amount': '5000'},
+          ],
+        });
+        expect(prepared.memo, 'Swap ATOM · by Zunia-wallet');
+        expect(
+          reviewProblems(
+            prepared.review,
+            msgs: msgs,
+            chainId: 'cosmoshub-4',
+            policy: data.fees,
+            book: data.book,
+            now: at,
+            venueChainId: 'osmosis-1',
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'one signature refuses a transaction it did not build: another receiver, minimum, route or extra message',
+      () async {
+        final c = world();
+        final view = await plan(
+          c,
+          from: 'cosmoshub-4:uatom',
+          to: 'osmosis-1:uosmo',
+          amount: '1',
+        );
+        final at = DateTime.now();
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view, now: at);
+        List<String> problems(List<TxMsg> msgs) => reviewProblems(
+          prepared.review,
+          msgs: msgs,
+          chainId: 'cosmoshub-4',
+          policy: data.fees,
+          book: data.book,
+          now: at,
+          venueChainId: 'osmosis-1',
+        );
+        final transfer = prepared.msgs[0];
+        TxMsg withValue(Map<String, Object?> changes) =>
+            TxMsg(transfer.typeUrl, {...transfer.value, ...changes});
+        final memo = transfer.value['memo'] as String;
+
+        expect(problems([withValue({'receiver': xcs}), prepared.msgs[1]]), isNotEmpty);
+        expect(
+          problems([
+            withValue({'memo': memo.replaceFirst('"492525"', '"1"')}),
+            prepared.msgs[1],
+          ]),
+          isNotEmpty,
+        );
+        expect(
+          problems([
+            withValue({'memo': memo.replaceFirst('"3498"', '"1"')}),
+            prepared.msgs[1],
+          ]),
+          isNotEmpty,
+        );
+        // A timeout written as a string is a memo Zunia cannot read.
+        final quoted = memo.replaceFirstMapped(
+          RegExp(r'"timeout_timestamp":(\d+)'),
+          (m) => '"timeout_timestamp":"${m[1]}"',
+        );
+        expect(problems([withValue({'memo': quoted}), prepared.msgs[1]]), [
+          unreadableSwap,
+        ]);
+        expect(problems([...prepared.msgs, prepared.msgs[1]]), [extraMessages]);
+      },
+    );
+
+    test(
+      'contract from another chain: [MsgTransfer to the contract with the swap memo, fee on that chain]',
+      () async {
+        final c = world(entryPoint: entryOff);
         final view = await plan(
           c,
           from: 'cosmoshub-4:uatom',
@@ -489,7 +651,7 @@ void main() {
           book: data.book,
           catalog: data.catalog,
         );
-        final c = world(swapData: noFee);
+        final c = world(swapData: noFee, entryPoint: entryOff);
         final view = await plan(
           c,
           from: 'cosmoshub-4:uatom',

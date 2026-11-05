@@ -347,17 +347,19 @@ List<SwapAsset> buyOptions(
 /// to reach: a swap in Osmosis's pools when the funds are there, or a pair the
 /// contract's table holds.
 ///
-/// Otherwise (SAF on Safrochain: the table has no SAF route, so every pair
-/// moves the tokens to Osmosis first) the second step is a swap in Osmosis's
-/// pools, so a row delivered on Osmosis needs nothing after it, and USDC is
-/// what a sale is most often for (pool 3600 pairs SAF with it). A row the
-/// table cannot answer for, such as a held voucher nothing identifies (an IBC
-/// USDC on Safrochain), is never the default: it was, and it would need the
-/// output sent on through a third chain.
+/// Otherwise, when the From reaches Osmosis in one hop ([oneSignature] says
+/// which rows a one-signature swap reaches: SAF on Safrochain, through Skip
+/// Go's entry point), USDC delivered on Osmosis first: USDC is what a sale is
+/// most often for (pool 3600 pairs SAF with it), and nothing follows the swap.
+/// Then the rows delivered on Osmosis, USDC first, as the second step of a
+/// move-first swap is a swap in Osmosis's pools. A row nothing identifies,
+/// such as a held voucher on another chain (an IBC USDC on Safrochain), is
+/// never the default: it would need the output sent on through a third chain.
 SwapAsset? pickTo(
   List<SwapAsset> destinations,
   String? toKey, {
   String? fromChainId,
+  bool Function(SwapAsset to)? oneSignature,
 }) {
   if (toKey != null) {
     for (final asset in destinations) {
@@ -370,17 +372,30 @@ SwapAsset? pickTo(
   ];
   if (usable.isEmpty) return null;
   if (fromChainId == null) return usable.first;
+  final reached = <SwapAsset>[];
   for (final asset in usable) {
     final path = swapPathFor(
       fromChainId,
       asset.chainId,
       asset.executable,
       venueChainId: kOsmosisChainId,
+      oneSignature: oneSignature?.call(asset) ?? false,
     );
     if (isPoolPath(path)) return asset;
     if (path == SwapPath.contract && asset.executable == Executable.yes) {
       return asset;
     }
+    if (path == SwapPath.oneSignature) reached.add(asset);
+  }
+  if (reached.isNotEmpty) {
+    final onVenue = [
+      for (final asset in reached)
+        if (asset.chainId == kOsmosisChainId) asset,
+    ];
+    for (final asset in onVenue) {
+      if (asset.identity.family == 'USDC') return asset;
+    }
+    return onVenue.isNotEmpty ? onVenue.first : reached.first;
   }
   final onVenue = [
     for (final asset in usable)

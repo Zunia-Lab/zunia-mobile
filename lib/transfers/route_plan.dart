@@ -581,6 +581,34 @@ class TransferPlanner {
     };
   }
 
+  /// Whether every channel of [path] has a definite answer from this session's
+  /// checks, so its preview can say verified or not without guessing.
+  bool pathChecked(RoutePath path) =>
+      path.links.every((link) => _cached(linkCheckKey(link)) != null);
+
+  /// Check every channel of [path] now, before any amount is typed: the
+  /// route preview then shows what the chain answered rather than a seed's
+  /// "not verified". Each answer is this session's, so the plan made once an
+  /// amount is typed reuses it. A check that cannot run leaves its channel
+  /// unanswered; nothing here throws.
+  Future<void> checkPath(RoutePath path) async {
+    await Future.wait([
+      for (final link in path.links)
+        () async {
+          try {
+            await checkChannelHop(
+              link.sourceChainId,
+              link.destChainId,
+              link.channelId,
+              portId: link.port ?? transferPort,
+            );
+          } on Object {
+            // Live reads off, or cancelled: the preview stays unanswered.
+          }
+        }(),
+    ]);
+  }
+
   /* ---------------------------------------------------------------- *
    * Channel checks
    * ---------------------------------------------------------------- */

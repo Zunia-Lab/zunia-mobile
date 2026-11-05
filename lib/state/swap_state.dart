@@ -2,10 +2,11 @@
 /// the plan and price for the pair on screen, and the review that gets signed.
 ///
 /// Matches zunia-extension 0.1.5 (`entrypoints/popup/screens/SwapScreen.tsx`)
-/// in logic. Four paths (`lib/swap/swap_path.dart`): the crosschain-swaps
-/// contract (`contract`), Osmosis's own pools for funds already there (`pool`,
-/// `pool-deliver`), and `move-first` for funds the contract cannot swap where
-/// they are. Every path charges Zunia's commission (`lib/swap/swap_fee.dart`)
+/// in logic. Five paths (`lib/swap/swap_path.dart`): one signature through
+/// Skip Go's entry point for funds one hop from Osmosis (`oneSignature`), the
+/// crosschain-swaps contract (`contract`), Osmosis's own pools for funds
+/// already there (`pool`, `pool-deliver`), and `move-first` for funds nothing
+/// else can swap where they are. Every path charges Zunia's commission (`lib/swap/swap_fee.dart`)
 /// in the same transaction, and every control is enabled only when its whole
 /// path works, with the first thing that does not work named under it.
 ///
@@ -26,7 +27,6 @@ import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/config/interchain_config.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/services/interchain/channels.dart';
-import 'package:zunia_mobile/services/interchain/denom.dart';
 import 'package:zunia_mobile/services/interchain/lcd.dart';
 import 'package:zunia_mobile/services/interchain/memo.dart';
 import 'package:zunia_mobile/services/interchain/registry.dart';
@@ -37,6 +37,7 @@ import 'package:zunia_mobile/services/interchain/xcs_route.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/osmosis_assets.dart';
 import 'package:zunia_mobile/swap/pool_swap.dart';
 import 'package:zunia_mobile/swap/swap_amounts.dart';
@@ -263,6 +264,33 @@ final xcsRouteTableProvider = FutureProvider<XcsRouteTable?>((ref) async {
   return loadXcsRoutes(contract, lcd: ref.watch(lcdFactoryProvider)(chain));
 });
 
+/// Skip Go's entry point, checked on Osmosis (code id, label, no admin) before
+/// any swap is offered through it.
+final entryPointStatusProvider = FutureProvider<EntryPointCheck>((ref) async {
+  final data = await ref.watch(swapDataProvider.future);
+  final chain = ref.watch(interchainRegistryProvider).get(data.venueChainId);
+  if (chain == null || lcdEndpointsFromChain(chain).isEmpty) {
+    return const EntryPointCheck.unavailable(
+      'Zunia has no endpoint for Osmosis, so the one-signature swap contract cannot be checked.',
+    );
+  }
+  try {
+    final body = await ref
+        .watch(lcdFactoryProvider)(chain)
+        .getJson(
+          '/cosmwasm/wasm/v1/contract/${Uri.encodeComponent(kSkipEntryPoint)}',
+          const LcdRequestOptions(cacheTtl: Duration(minutes: 10)),
+        );
+    return readEntryPointInfo(body);
+  } on InterchainError catch (error) {
+    return EntryPointCheck.unavailable(
+      error.code == InterchainErrorCode.readsDisabled
+          ? 'Live reads are off, so the swap contract on Osmosis has not been checked. Turn them on in Settings to swap.'
+          : 'Could not reach Osmosis to check the swap contract. One-signature swaps stay off until it can be confirmed.',
+    );
+  }
+});
+
 /* -------------------------------------------------------------------------- *
  * Plans
  * -------------------------------------------------------------------------- */
@@ -368,6 +396,8 @@ class PoolPlan {
     required this.quote,
     this.delivery,
     this.deliveryError,
+    this.inbound,
+    this.inboundError,
   });
 
   final String key;
@@ -379,9 +409,14 @@ class PoolPlan {
   final String amountBaseUnits;
   final PoolQuote quote;
 
-  /// The checked transfer leg (`pool-deliver`).
+  /// The checked transfer leg (`pool-deliver`, and a one-signature swap
+  /// delivered off Osmosis).
   final PoolDelivery? delivery;
   final String? deliveryError;
+
+  /// The checked hop to Osmosis of a one-signature swap.
+  final VenueInbound? inbound;
+  final String? inboundError;
 
   PoolPlan withQuote(PoolQuote next, DateTime at) => PoolPlan(
     key: key,
@@ -392,6 +427,8 @@ class PoolPlan {
     quote: next,
     delivery: delivery,
     deliveryError: deliveryError,
+    inbound: inbound,
+    inboundError: inboundError,
   );
 }
 
@@ -620,6 +657,7 @@ class SwapView {
     required this.osmosisError,
     required this.holdingsLoaded,
     required this.manual,
+    this.entryPoint,
   });
 
   final SwapData? data;
@@ -685,11 +723,21 @@ class SwapView {
   final bool holdingsLoaded;
   final List<RouteHopOverride> manual;
 
+  /// Skip Go's entry point as checked on Osmosis; null while unread.
+  final EntryPointCheck? entryPoint;
+
   String get venueChainId => data?.venueChainId ?? kSwapVenueChainId;
 
-  /// The pool plan's checked delivery, for `pool-deliver`.
+  /// The pool plan's checked delivery, for `pool-deliver` and a one-signature
+  /// swap delivered off Osmosis.
   PoolDelivery? get delivery =>
-      path == SwapPath.poolDeliver ? pool?.delivery : null;
+      path == SwapPath.poolDeliver || path == SwapPath.oneSignature
+      ? pool?.delivery
+      : null;
+
+  /// The checked hop to Osmosis of a one-signature swap.
+  VenueInbound? get inbound =>
+      path == SwapPath.oneSignature ? pool?.inbound : null;
 
   /// What the form would sign right now, for a review to be checked against.
   LiveSwap get live => LiveSwap(
@@ -705,6 +753,7 @@ class SwapView {
         : routePlanFingerprint(contract!.plan!, contract!.receiver ?? ''),
     delivery: delivery,
     blockedReason: blockedReason,
+    inbound: inbound,
   );
 }
 
@@ -724,6 +773,8 @@ class SwapEnv {
     required this.venueLoading,
     required this.liveReads,
     required this.resolve,
+    this.entryPoint,
+    this.entryPointLoading = false,
   });
 
   final SwapData? data;
@@ -737,6 +788,10 @@ class SwapEnv {
   final bool venueLoading;
   final bool liveReads;
   final SwapAddressResolver resolve;
+
+  /// Skip Go's entry point as checked on Osmosis.
+  final EntryPointCheck? entryPoint;
+  final bool entryPointLoading;
 }
 
 String _manualKey(List<RouteHopOverride> manual) => [
@@ -809,7 +864,25 @@ SwapView buildSwapView({
           osmosis: osmosis,
           routes: env.routes,
         );
-  final to = pickTo(destinations, form.toKey, fromChainId: from?.chainId);
+  // A one-signature swap goes through Skip Go's entry point. Once the chain
+  // has said it is not the contract this release checked, the pairs it would
+  // have taken go the ways they went before it (the contract, or a move to
+  // Osmosis first) rather than stopping.
+  final entryRefused =
+      !env.entryPointLoading &&
+      env.entryPoint != null &&
+      !env.entryPoint!.ready;
+  bool reaches(SwapAsset option) =>
+      !entryRefused &&
+      from != null &&
+      data != null &&
+      oneSignatureReaches(from, option, data.book, venueChainId: venueChainId);
+  final to = pickTo(
+    destinations,
+    form.toKey,
+    fromChainId: from?.chainId,
+    oneSignature: reaches,
+  );
 
   final path = from != null && to != null
       ? swapPathFor(
@@ -817,6 +890,7 @@ SwapView buildSwapView({
           to.chainId,
           to.executable,
           venueChainId: venueChainId,
+          oneSignature: reaches(to),
         )
       : null;
   final pathPending =
@@ -867,6 +941,7 @@ SwapView buildSwapView({
   final recoveryAddress = env.resolve(venueChainId);
   final venue = env.venue;
   final venueReady = venue?.ready ?? false;
+  final entryReady = env.entryPoint?.ready ?? false;
 
   final sameAsset =
       from != null &&
@@ -889,7 +964,9 @@ SwapView buildSwapView({
       !sameAsset &&
       path != null &&
       !pathPending &&
-      (path != SwapPath.contract || (venueReady && recoveryAddress != null));
+      (path != SwapPath.contract || (venueReady && recoveryAddress != null)) &&
+      (path != SwapPath.oneSignature ||
+          (entryReady && recoveryAddress != null));
   final planKey = canPlan
       ? swapPlanKey(
           from: from,
@@ -900,6 +977,8 @@ SwapView buildSwapView({
           manual: form.manual,
           venueKey: path == SwapPath.contract
               ? venue?.contractAddress ?? ''
+              : path == SwapPath.oneSignature
+              ? 'entry-point:$kSkipEntryPoint'
               : 'osmosis-pools:${path.name}',
           retryToken: form.retryToken,
           venueChainId: venueChainId,
@@ -965,6 +1044,10 @@ SwapView buildSwapView({
       if (env.venueLoading || pathPending) return null;
       if (venue?.reason != null) return venue!.reason;
     }
+    if (path == SwapPath.oneSignature) {
+      if (env.entryPointLoading || env.entryPoint == null) return null;
+      if (!env.entryPoint!.ready) return env.entryPoint!.reason;
+    }
     if (signer == null) {
       return 'Zunia has no address on ${from.chainName}, so it cannot sign there.';
     }
@@ -988,10 +1071,22 @@ SwapView buildSwapView({
       return 'Slippage must be between 0 and ${_percentText(config?.maxSlippagePercent ?? 50)}%. Above that the tolerance stops protecting anything.';
     }
     if (path != SwapPath.contract) {
+      if (path == SwapPath.oneSignature && recoveryAddress == null) {
+        return 'Zunia could not derive your address on Osmosis, where a failed delivery would land, so the swap is refused.';
+      }
       if (planning || pool == null) return null;
+      if (path == SwapPath.oneSignature) {
+        if (pool.inboundError != null) return pool.inboundError;
+        if (pool.inbound == null) {
+          return 'Zunia is checking the channel to Osmosis.';
+        }
+      }
       if (quoteError != null) return quoteError;
       if (quote == null) return 'Waiting for a price from the Osmosis router.';
-      if (path == SwapPath.poolDeliver) {
+      final delivers =
+          path == SwapPath.poolDeliver ||
+          (path == SwapPath.oneSignature && to.chainId != venueChainId);
+      if (delivers) {
         if (pool.deliveryError != null) return pool.deliveryError;
         if (pool.delivery == null) {
           return 'Zunia is planning the transfer to ${to.chainName}.';
@@ -1032,6 +1127,11 @@ SwapView buildSwapView({
       !planning &&
       (path == SwapPath.contract
           ? contract?.plan != null
+          : path == SwapPath.oneSignature
+          ? entryReady &&
+                (pool?.quote.ready ?? false) &&
+                pool?.inbound != null &&
+                (to?.chainId == venueChainId || pool?.delivery != null)
           : isPoolPath(path) &&
                 (pool?.quote.ready ?? false) &&
                 (path == SwapPath.pool || pool?.delivery != null));
@@ -1083,6 +1183,7 @@ SwapView buildSwapView({
     osmosisError: env.osmosis.error,
     holdingsLoaded: env.holdingsLoaded,
     manual: form.manual,
+    entryPoint: env.entryPoint,
   );
 }
 
@@ -1096,6 +1197,7 @@ final swapViewProvider = Provider<SwapView>((ref) {
   final osmosis = ref.watch(osmosisSwapAssetsProvider);
   final routes = ref.watch(xcsRouteTableProvider);
   final venue = ref.watch(swapVenueStatusProvider);
+  final entryPoint = ref.watch(entryPointStatusProvider);
   final live = ref.watch(preferencesProvider.select((p) => p.liveReads));
   return buildSwapView(
     env: SwapEnv(
@@ -1113,6 +1215,8 @@ final swapViewProvider = Provider<SwapView>((ref) {
       venueLoading: venue.isLoading,
       liveReads: live,
       resolve: ref.watch(swapAddressResolverProvider),
+      entryPoint: entryPoint.valueOrNull,
+      entryPointLoading: entryPoint.isLoading,
     ),
     form: ref.watch(swapControllerProvider),
     settings: ref.watch(swapSettingsProvider),
@@ -1786,6 +1890,14 @@ class SwapController extends StateNotifier<SwapFormState> {
     final sells = view.path == SwapPath.moveFirst
         ? data.fees.feeFor(venueChainId, view.amountUnits!).net
         : view.fee!.net;
+    final oneSignature = view.path == SwapPath.oneSignature;
+    VenueInbound? inbound;
+    String? inboundError;
+    if (oneSignature) {
+      final planned = await planVenueInbound(view);
+      inbound = planned.inbound;
+      inboundError = planned.error;
+    }
     final lcd = _venueLcd(venueChainId);
     final quote = lcd == null
         ? PoolQuote(
@@ -1800,10 +1912,14 @@ class SwapController extends StateNotifier<SwapFormState> {
             venueLcd: lcd,
             router: _ref.read(swapRouterProvider),
             describe: _describe,
+            singleRoute: oneSignature,
           );
     PoolDelivery? delivery;
     String? deliveryError;
-    if (view.path == SwapPath.poolDeliver && quote.minOut != null) {
+    final delivers =
+        view.path == SwapPath.poolDeliver ||
+        (oneSignature && to.chainId != venueChainId);
+    if (delivers && quote.minOut != null) {
       final planned = await planPoolDelivery(view, venueOut);
       delivery = planned.delivery;
       deliveryError = planned.error;
@@ -1817,7 +1933,46 @@ class SwapController extends StateNotifier<SwapFormState> {
       quote: quote,
       delivery: delivery,
       deliveryError: deliveryError,
+      inbound: inbound,
+      inboundError: inboundError,
     );
+  }
+
+  /// Plan the hop that brings a one-signature swap's tokens to Osmosis: the
+  /// table's canonical channel, checked live on the From's chain (open, and
+  /// leading to Osmosis). The transfer is what the user signs, so a channel
+  /// that does not check out stops the swap here.
+  Future<({VenueInbound? inbound, String? error})> planVenueInbound(
+    SwapView view,
+  ) async {
+    final data = view.data!;
+    final from = view.from!;
+    final venueChainId = data.venueChainId;
+    final inbound = venueInboundOf(
+      from,
+      data.book,
+      venueChainId: venueChainId,
+    );
+    if (inbound == null) {
+      return (
+        inbound: null,
+        error:
+            'Zunia found no direct channel that brings ${from.ticker} to Osmosis as the token its pools trade, so it will not swap it in one signature.',
+      );
+    }
+    try {
+      final check = await _ref
+          .read(channelServiceProvider)
+          .validateIbcChannel(
+            from.chainId,
+            inbound.channelId,
+            destChainId: venueChainId,
+          );
+      if (!check.ok) return (inbound: null, error: check.message);
+    } on InterchainError catch (error) {
+      return (inbound: null, error: _describe(error));
+    }
+    return (inbound: inbound, error: null);
   }
 
   /// Plan the transfer that sends a pool swap's output from Osmosis to the
@@ -1836,40 +1991,29 @@ class SwapController extends StateNotifier<SwapFormState> {
         'Delivering this token from Osmosis needs a route through another chain, which Zunia does not sign behind a swap. Swap to the token on Osmosis, then send it.';
     const otherVariant =
         'The transfer from Osmosis would deliver another variant of this token than the one you picked, so the swap stays unsigned.';
-    String channel;
-    String arrival;
-    if (venueOut.startsWith('ibc/')) {
-      // A voucher goes home by unwinding its one hop.
-      final row = data.book.rowOf(venueChainId, venueOut);
-      if (row == null ||
-          row.channelId == null ||
-          row.path.split('/').length != 2 ||
-          row.counterpartyChainId != to.chainId) {
+    // A voucher goes home by unwinding its one hop; Osmosis's own token
+    // travels out over the canonical channel and arrives as its voucher.
+    final resolved = venueDeliveryOf(
+      toChainId: to.chainId,
+      toDenom: to.denom,
+      venueOut: venueOut,
+      book: data.book,
+      venueChainId: venueChainId,
+    );
+    switch (resolved.refusal) {
+      case VenueDeliveryRefusal.throughAnother:
         return (delivery: null, error: throughAnother);
-      }
-      channel = row.channelId!;
-      arrival = row.originDenom;
-    } else {
-      // Osmosis's own token travels out over the canonical channel and
-      // arrives as that channel's voucher.
-      final canonical = data.book.canonicalChannel(venueChainId, to.chainId);
-      if (canonical == null) {
+      case VenueDeliveryRefusal.noChannel:
         return (
           delivery: null,
           error: 'Zunia found no channel from Osmosis to deliver this token.',
         );
-      }
-      channel = canonical.channelId;
-      arrival = ibcDenomHash(
-        '$transferPort/${canonical.counterpartyChannelId}',
-        venueOut,
-      );
+      case VenueDeliveryRefusal.otherVariant:
+        return (delivery: null, error: otherVariant);
+      case null:
+        break;
     }
-    String key(String denom) =>
-        denom.startsWith('ibc/') ? denom.toUpperCase() : denom;
-    if (key(arrival) != key(to.denom)) {
-      return (delivery: null, error: otherVariant);
-    }
+    final channel = resolved.channel!;
     try {
       final check = await _ref
           .read(channelServiceProvider)
@@ -1936,6 +2080,7 @@ class SwapController extends StateNotifier<SwapFormState> {
           venueLcd: lcd,
           router: _ref.read(swapRouterProvider),
           describe: _describe,
+          singleRoute: view.path == SwapPath.oneSignature,
         );
         if (mounted && state.pool?.key == key) {
           state = state.copyWith(pool: current.withQuote(next, _now()));
@@ -2060,6 +2205,7 @@ class SwapController extends StateNotifier<SwapFormState> {
     if (lcd == null) {
       throw SwapException('No REST endpoint for ${data.venueChainId}.');
     }
+    final oneSignature = view.path == SwapPath.oneSignature;
     final next = await quotePoolSwap(
       venueInputDenom: pool.venueInputDenom,
       venueOutputDenom: pool.venueOutputDenom,
@@ -2068,6 +2214,7 @@ class SwapController extends StateNotifier<SwapFormState> {
       venueLcd: lcd,
       router: _ref.read(swapRouterProvider),
       describe: _describe,
+      singleRoute: oneSignature,
     );
     final priced = _now();
     if (mounted && state.pool?.key == pool.key) {
@@ -2077,6 +2224,47 @@ class SwapController extends StateNotifier<SwapFormState> {
       throw SwapException(
         poolQuoteText(next.code, next.error, from, to) ??
             'The price could not be refreshed, so the swap was not prepared.',
+      );
+    }
+    if (oneSignature) {
+      final inbound = pool.inbound;
+      final recovery = view.recoveryAddress;
+      if (inbound == null || recovery == null) {
+        throw SwapException(
+          pool.inboundError ?? 'The channel to Osmosis is not checked yet.',
+        );
+      }
+      final onVenue = to.chainId == data.venueChainId;
+      if (!onVenue && pool.delivery == null) {
+        throw SwapException(
+          pool.deliveryError ??
+              'The transfer to ${to.chainName} is not planned yet.',
+        );
+      }
+      final review = EntryPointSwapReview(
+        id: _reviewCount,
+        from: from,
+        to: to,
+        amountUnits: amountUnits,
+        fee: fee,
+        planKey: view.planKey,
+        signer: signer,
+        recipient: destAddress,
+        price: SwapPrice(quote: next.quote, at: priced),
+        inbound: inbound,
+        venueOutputDenom: pool.venueOutputDenom,
+        slippagePercent: view.slippage,
+        route: next.routes!.single,
+        minOut: next.minOut!,
+        delivery: onVenue ? null : pool.delivery,
+        recoveryAddress: recovery,
+      );
+      final msgs = entryPointSwapTxMsgs(review, at);
+      return PreparedSwap(
+        review: review,
+        msgs: msgs,
+        memo: swapTxMemo(msgs, from.chainId, data.book),
+        chain: chain,
       );
     }
     final delivery = view.path == SwapPath.poolDeliver ? pool.delivery : null;
@@ -2191,6 +2379,44 @@ class SwapController extends StateNotifier<SwapFormState> {
           now: now ?? _now(),
         );
         return (review: updated, msgs: msgs, error: null);
+      case EntryPointSwapReview():
+        final lcd = _venueLcd(data.venueChainId);
+        if (lcd == null) {
+          return (
+            review: review,
+            msgs: null,
+            error: 'No REST endpoint for ${data.venueChainId}.',
+          );
+        }
+        final next = await quotePoolSwap(
+          venueInputDenom: review.inbound.arrivalDenom,
+          venueOutputDenom: review.venueOutputDenom,
+          amountBaseUnits: review.fee.net.toString(),
+          slippagePercent: review.slippagePercent,
+          venueLcd: lcd,
+          router: _ref.read(swapRouterProvider),
+          describe: _describe,
+          singleRoute: true,
+        );
+        if (!next.ready) {
+          return (
+            review: review,
+            msgs: null,
+            error:
+                poolQuoteText(next.code, next.error, review.from, review.to) ??
+                'The price could not be refreshed. The one you reviewed has expired.',
+          );
+        }
+        final updated = review.withPrice(
+          price: SwapPrice(quote: next.quote, at: _now()),
+          route: next.routes!.single,
+          minOut: next.minOut!,
+        );
+        return (
+          review: updated,
+          msgs: entryPointSwapTxMsgs(updated, now ?? _now()),
+          error: null,
+        );
     }
   }
 
