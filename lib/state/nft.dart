@@ -13,6 +13,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +22,7 @@ import 'package:zunia_mobile/config/nft_config.dart';
 import 'package:zunia_mobile/services/interchain/channels.dart';
 import 'package:zunia_mobile/services/interchain/lcd.dart';
 import 'package:zunia_mobile/services/interchain/nft.dart';
+import 'package:zunia_mobile/services/interchain/nft_code_scan.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/services/nft_metadata_fetcher.dart';
 import 'package:zunia_mobile/state/interchain.dart';
@@ -83,8 +85,7 @@ final nftChainSupportProvider =
     return NftChainSupport(
       chainId: chainId,
       state: NftChainSupportState.unknown,
-      reason: '$chainId is not in the chain catalog, so Zunia cannot tell '
-          'whether it runs CosmWasm.',
+      reason: '$chainId is not in the chain catalog.',
       evidence: 'chain is not in the registry',
     );
   }
@@ -99,9 +100,7 @@ final nftChainSupportProvider =
           : NftChainSupportState.unsupported,
       reason: declared
           ? null
-          : '${chain.chainName} does not run CosmWasm, so no CW721 contract '
-              'can exist on it and no address can hold an NFT there. This is a '
-              'property of the chain, not of your wallet.',
+          : '${chain.chainName} does not run CosmWasm.',
       evidence: 'registry features',
     );
   }
@@ -110,9 +109,7 @@ final nftChainSupportProvider =
     return NftChainSupport(
       chainId: chainId,
       state: NftChainSupportState.unknown,
-      reason: '${chain.chainName} has no REST endpoint configured, and the '
-          'bundled chain catalog does not carry its feature list, so Zunia '
-          'cannot tell whether it runs CosmWasm.',
+      reason: 'No REST endpoint configured for ${chain.chainName}.',
       evidence: 'no REST endpoint and no features',
     );
   }
@@ -121,9 +118,7 @@ final nftChainSupportProvider =
     return NftChainSupport(
       chainId: chainId,
       state: NftChainSupportState.unknown,
-      reason: 'The bundled chain catalog does not say whether '
-          '${chain.chainName} runs CosmWasm, and live reads are off, so the '
-          'chain cannot be asked. Turn live reads on in Settings.',
+      reason: 'Turn on live reads in Settings to check ${chain.chainName}.',
       evidence: 'live reads are off',
     );
   }
@@ -141,17 +136,13 @@ final nftChainSupportProvider =
     ModuleSupportStatus.unsupported => NftChainSupport(
         chainId: chainId,
         state: NftChainSupportState.unsupported,
-        reason: '${chain.chainName} answered that it has no CosmWasm module, '
-            'so no CW721 contract can exist on it. This is a property of the '
-            'chain, not of your wallet.',
+        reason: '${chain.chainName} has no CosmWasm module.',
         evidence: probe.evidence,
       ),
     ModuleSupportStatus.unknown => NftChainSupport(
         chainId: chainId,
         state: NftChainSupportState.unknown,
-        reason: '${chain.chainName} did not answer whether it runs CosmWasm '
-            '(${probe.evidence}), and the bundled chain catalog drops the '
-            'registry feature list, so Zunia will not claim either way.',
+        reason: '${chain.chainName} did not answer (${probe.evidence}).',
         evidence: probe.evidence,
       ),
   };
@@ -295,19 +286,13 @@ String? nftMediaBlockedReason({
   required bool hasIpfsGateway,
 }) {
   if (!liveReads) {
-    return 'Live reads are off, so nothing is fetched from any host — chain '
-        'endpoints included. Turn them on in Settings first.';
+    return 'Live reads are off. Turn them on in Settings.';
   }
   if (!mediaEnabled) {
-    return 'Artwork is off. Turning it on fetches images from whatever host '
-        'each token points at, which tells that host your IP address and which '
-        'tokens you hold.';
+    return 'Artwork is off.';
   }
   if (!hasIpfsGateway) {
-    return 'Artwork stored on IPFS cannot be loaded: this build has no IPFS '
-        'gateway configured, and Zunia does not pick one for you because that '
-        'would route every collection through a single operator. Tokens hosted '
-        'on https still load.';
+    return 'IPFS artwork isn\'t available in this build.';
   }
   return null;
 }
@@ -389,6 +374,8 @@ class NftGalleryState {
     this.issues = const [],
     this.sources = const [],
     this.contractsQueried = 0,
+    this.codesScanned = 0,
+    this.fromChainScan = false,
     this.complete = false,
     this.limitation,
     this.detailBudgetSpent = false,
@@ -411,6 +398,14 @@ class NftGalleryState {
   /// How many contracts were actually asked. `empty` with a zero here would be
   /// a lie, which is why [NftGalleryStatus.nothingToQuery] exists.
   final int contractsQueried;
+
+  /// Wasm codes whose CW721 verdict the chain scan used. Zero means the scan
+  /// did not ask the chain anything.
+  final int codesScanned;
+
+  /// True when a collection on screen came from the chain scan rather than
+  /// the shipped list or the user.
+  final bool fromChainScan;
 
   /// True only when an indexer answered without error.
   final bool complete;
@@ -437,6 +432,8 @@ class NftGalleryState {
     List<NftDiscoveryIssue>? issues,
     List<NftDiscoverySource>? sources,
     int? contractsQueried,
+    int? codesScanned,
+    bool? fromChainScan,
     bool? complete,
     String? limitation,
     bool? detailBudgetSpent,
@@ -449,6 +446,8 @@ class NftGalleryState {
         issues: issues ?? this.issues,
         sources: sources ?? this.sources,
         contractsQueried: contractsQueried ?? this.contractsQueried,
+        codesScanned: codesScanned ?? this.codesScanned,
+        fromChainScan: fromChainScan ?? this.fromChainScan,
         complete: complete ?? this.complete,
         limitation: limitation ?? this.limitation,
         detailBudgetSpent: detailBudgetSpent ?? this.detailBudgetSpent,
@@ -469,7 +468,8 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
   /// Guards against two overlapping runs writing each other's results.
   int _run = 0;
 
-  Future<void> refresh() async {
+  /// [force] rescans the chain's code list instead of reusing a recent scan.
+  Future<void> refresh({bool force = false}) async {
     final run = ++_run;
     final chainId = state.chainId;
     state = state.copyWith(status: NftGalleryStatus.loading, reason: null);
@@ -501,8 +501,7 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
     if (chain == null || lcdEndpointsFromChain(chain).isEmpty) {
       state = state.copyWith(
         status: NftGalleryStatus.noEndpoint,
-        reason: '$chainName has no REST endpoint configured, so no contract '
-            'on it can be queried.',
+        reason: 'No REST endpoint configured for $chainName.',
         items: const [],
       );
       return;
@@ -510,8 +509,7 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
     if (!_ref.read(preferencesProvider.select((p) => p.liveReads))) {
       state = state.copyWith(
         status: NftGalleryStatus.readsDisabled,
-        reason: 'Live reads are off, so no CW721 contract was queried. This '
-            'says nothing about what this address holds.',
+        reason: 'Live reads are off.',
         items: const [],
       );
       return;
@@ -524,8 +522,7 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
     if (owner == null) {
       state = state.copyWith(
         status: NftGalleryStatus.noAccount,
-        reason: 'This wallet has no address on $chainName, so there is nothing '
-            'to look up. Enable the network first.',
+        reason: 'No address on $chainName. Enable the network first.',
         items: const [],
       );
       return;
@@ -533,26 +530,52 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
 
     final known = kNftKnownCollections[chainId] ?? const <String>[];
     final user = _ref.read(nftUserCollectionsProvider).forChain(chainId);
-    if (known.isEmpty && user.isEmpty && !kNftIndexerAvailable) {
-      state = state.copyWith(
-        status: NftGalleryStatus.nothingToQuery,
-        reason: 'Nothing was queried. CosmWasm has no chain-wide index of NFTs '
-            'by owner, this build ships no collection list for $chainName, and '
-            'no indexer is configured — so without a contract address there is '
-            'no question to ask. Paste a collection address to check one.',
-        items: const [],
-        contractsQueried: 0,
-      );
-      return;
-    }
 
     final ctx = await _ref.read(nftContextProvider(chainId).future);
     if (run != _run) return;
     if (ctx == null) {
       state = state.copyWith(
         status: NftGalleryStatus.noEndpoint,
-        reason: 'Zunia could not open a read connection to $chainName.',
+        reason: 'No connection to $chainName.',
         items: const [],
+      );
+      return;
+    }
+
+    // No index of NFTs by owner exists on CosmWasm, so the chain's own code
+    // list stands in for one: the newest CW721 contracts become candidates.
+    // A failed scan is shown as an issue; the shipped and pasted contracts are
+    // still read.
+    var scan = const NftCodeScanResult();
+    NftDiscoveryIssue? scanIssue;
+    try {
+      scan = await NftCodeScanner(ctx, store: const SharedPrefsNftCodeScanStore())
+          .scan(owner, force: force);
+    } on InterchainError catch (error) {
+      if (error.code == InterchainErrorCode.aborted) return;
+      scanIssue = NftDiscoveryIssue(
+        contractAddress: null,
+        message: 'Chain scan: ${error.message}',
+      );
+    }
+    if (run != _run) return;
+
+    final shipped = known.toSet();
+    final scanned = scan.contracts.where((a) => !shipped.contains(a)).toList();
+    if (known.isEmpty && user.isEmpty && scanned.isEmpty) {
+      final codes = scan.codesScanned;
+      state = state.copyWith(
+        status: codes > 0
+            ? NftGalleryStatus.empty
+            : NftGalleryStatus.nothingToQuery,
+        reason: codes > 0
+            ? 'No NFT collections found on $chainName.'
+            : 'No collections to check on $chainName.',
+        items: const [],
+        issues: [?scanIssue],
+        contractsQueried: 0,
+        codesScanned: codes,
+        fromChainScan: false,
       );
       return;
     }
@@ -563,8 +586,10 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
         ctx,
         owner,
         options: NftDiscoveryOptions(
-          knownContracts: known,
+          knownContracts: [...known, ...scanned],
           userContracts: user,
+          maxContracts:
+              max(defaultMaxDiscoveryContracts, known.length + scanned.length),
           request: const LcdRequestOptions(cacheTtl: Duration(seconds: 30)),
         ),
       );
@@ -572,14 +597,32 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
       if (run != _run) return;
       state = state.copyWith(
         status: NftGalleryStatus.failed,
-        reason: 'Could not read collections on $chainName: ${error.message}',
+        reason: error.message,
         items: const [],
       );
       return;
     }
     if (run != _run) return;
 
-    final queried = <String>{...known, ...user}.length;
+    final queried = <String>{...known, ...scanned, ...user}.length;
+    final scannedSet = scanned.toSet();
+    final userSet = user.toSet();
+    bool notCw721(NftDiscoveryIssue issue) =>
+        issue.message.startsWith('${InterchainErrorCode.contractError.name}:') ||
+        issue.message.startsWith('${InterchainErrorCode.malformedResponse.name}:');
+    final issues = <NftDiscoveryIssue>[
+      ?scanIssue,
+      for (final issue in discovery.issues)
+        // A scanned contract that refuses a CW721 query answered "not a
+        // collection"; that is the scan being wide, not a failure to show.
+        if (!(scannedSet.contains(issue.contractAddress) &&
+            !userSet.contains(issue.contractAddress) &&
+            notCw721(issue)))
+          issue,
+    ];
+    final fromChainScan = discovery.holdings.any((h) =>
+        h.source == NftDiscoverySource.known &&
+        scannedSet.contains(h.contractAddress));
     final items = <NftGalleryItem>[
       for (final holding in discovery.holdings)
         for (final tokenId in holding.tokenIds)
@@ -594,16 +637,15 @@ class NftGalleryController extends StateNotifier<NftGalleryState> {
     state = state.copyWith(
       status: items.isEmpty ? NftGalleryStatus.empty : NftGalleryStatus.loaded,
       reason: items.isEmpty
-          ? 'Zunia queried $queried '
-              '${queried == 1 ? 'collection' : 'collections'} on $chainName and '
-              'this address holds nothing in '
-              '${queried == 1 ? 'it' : 'them'}. Other collections it does not '
-              'know about are not covered.'
+          ? 'No NFTs in $queried '
+              '${queried == 1 ? 'collection' : 'collections'} checked.'
           : null,
       items: items,
-      issues: discovery.issues,
+      issues: issues,
       sources: discovery.sources,
       contractsQueried: queried,
+      codesScanned: scan.codesScanned,
+      fromChainScan: fromChainScan,
       complete: discovery.complete,
       limitation: discovery.limitation,
       detailBudgetSpent: items.length > kNftTokenDetailBudget,
@@ -792,8 +834,7 @@ final nftTokenDetailProvider =
               mediaEnabled: prefs.nftMedia,
               hasIpfsGateway: kNftIpfsGateways.isNotEmpty,
             )
-          : 'The off-chain metadata document could not be read: '
-              '${error.message}';
+          : 'Off-chain metadata unavailable: ${error.message}';
     }
   }
 
@@ -801,7 +842,7 @@ final nftTokenDetailProvider =
   String? imageUrl;
   String? imageReason;
   if (image == null) {
-    imageReason = 'This token carries no image, on chain or off.';
+    imageReason = 'This token has no image.';
   } else if (!prefs.nftMedia || !prefs.liveReads) {
     imageReason = nftMediaBlockedReason(
       liveReads: prefs.liveReads,
@@ -817,8 +858,7 @@ final nftTokenDetailProvider =
     if (resolved.kind == ResolvedTokenUriKind.http && resolved.urls.isNotEmpty) {
       imageUrl = resolved.urls.first;
     } else {
-      imageReason = 'Zunia cannot turn this token\'s image reference into a '
-          'URL it may fetch: ${resolved.reason ?? 'unsupported reference'}.';
+      imageReason = 'Image link not supported: ${resolved.reason ?? 'unknown format'}.';
     }
   }
 
@@ -867,19 +907,14 @@ Ics721Route ics721RouteFor({
   final bridge = kIcs721Bridges[sourceChainId];
   if (bridge == null || bridge.isEmpty) {
     return Ics721Route(
-      reason: 'This build has no cw-ics721 bridge contract for $from. Sending '
-          'an NFT across chains hands it to that contract for safekeeping, so '
-          'Zunia will not guess the address: a wrong one escrows the token '
-          'where nothing can release it.',
+      reason: 'No ICS721 bridge is configured for $from.',
     );
   }
   final channel = kIcs721Channels[ics721ChannelKey(sourceChainId, destChainId)];
   if (channel == null || channel.isEmpty) {
     return Ics721Route(
       bridgeContract: bridge,
-      reason: 'This build has no ICS721 channel from $from to $to. ICS721 runs '
-          'on its own port, so a normal IBC transfer channel cannot be reused '
-          'and Zunia will not substitute one.',
+      reason: 'No ICS721 channel from $from to $to.',
     );
   }
   return Ics721Route(bridgeContract: bridge, channelId: channel);

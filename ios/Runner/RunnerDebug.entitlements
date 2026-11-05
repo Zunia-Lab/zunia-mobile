@@ -2,7 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Associated Domains omitted for Debug: personal Apple teams cannot provision
-	     that capability. Re-enable via Runner.entitlements on a paid org team. -->
+	<!-- Same as Runner.entitlements, so app links (https://zunialab.com/connect,
+	     /connect/wake, /wc) can be tested in Debug. Needs a team that can
+	     provision Associated Domains; a personal team cannot. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:zunialab.com</string>
+		<string>applinks:link.zunialab.com</string>
+	</array>
 </dict>
 </plist>

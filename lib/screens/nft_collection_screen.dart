@@ -4,11 +4,8 @@
 /// [NftCollectionScreen] show exactly the same thing rather than two views that
 /// drift.
 ///
-/// The screen's job is to never let a gallery imply something nobody checked.
-/// CosmWasm has no chain-wide index of NFTs by owner, so "we asked five
-/// collections and you hold nothing in them", "we had no address to ask about",
-/// "this chain cannot run CW721 at all" and "we could not tell" are four
-/// different sentences, and each of them is on screen instead of an empty grid.
+/// Gallery first: every "nothing to show" state is an icon, a short title, at
+/// most one short line and the single useful action, never a paragraph.
 library;
 
 import 'package:flutter/material.dart';
@@ -49,9 +46,7 @@ class _NftCollectionScreenState extends ConsumerState<NftCollectionScreen> {
             onBack: () => Navigator.of(context).pop(),
             body: const ZuniaEmptyState(
               title: 'No networks enabled',
-              description:
-                  'Enable a chain before looking for what this wallet holds on '
-                  'it.',
+              description: 'Enable a network to see its NFTs.',
             ),
           ),
         ),
@@ -98,6 +93,7 @@ class NftGalleryView extends ConsumerStatefulWidget {
 
 class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
   final _address = TextEditingController();
+  final _addKey = GlobalKey();
   String? _addError;
   bool _adding = false;
 
@@ -120,10 +116,26 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
     super.dispose();
   }
 
-  void _refresh() {
+  void _refresh({bool force = false}) {
     if (!mounted) return;
-    ref.read(nftGalleryProvider(widget.chainId).notifier).refresh();
+    ref.read(nftGalleryProvider(widget.chainId).notifier).refresh(force: force);
   }
+
+  /// Scrolls down to the add-a-collection field.
+  void _focusAdd() {
+    final ctx = _addKey.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _openSettings() => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+      );
 
   Future<void> _addCollection() async {
     final value = _address.text.trim();
@@ -132,16 +144,14 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
         );
     final prefix = chain.isEmpty ? null : chain.first.chain.bech32Prefix;
     if (value.isEmpty) {
-      setState(() => _addError = 'Paste a CW721 contract address first.');
+      setState(() => _addError = 'Paste a contract address first.');
       return;
     }
     // Checked against this chain's prefix rather than a generic bech32 shape:
     // an address from another chain is well-formed and would produce a
     // confusing "contract rejected the query" a screen later.
     if (prefix != null && !addressHasPrefix(value, prefix)) {
-      setState(() => _addError =
-          'That address is not on this chain: it does not start with '
-          '"${prefix}1", so no contract here can have it.');
+      setState(() => _addError = 'Address must start with "${prefix}1".');
       return;
     }
     setState(() {
@@ -154,7 +164,7 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
     if (!mounted) return;
     setState(() {
       _adding = false;
-      _addError = added ? null : 'That collection is already on the list.';
+      _addError = added ? null : 'Already on your list.';
       if (added) _address.clear();
     });
     if (added) _refresh();
@@ -190,6 +200,21 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
         ),
     ];
 
+    final chain = ref
+        .watch(chainAccountsProvider)
+        .where((a) => a.chain.chainId == widget.chainId)
+        .firstOrNull
+        ?.chain;
+    final chainName = chain?.chainName ?? widget.chainId;
+    final status = state.status;
+    final showEmpty = items.isEmpty &&
+        !state.busy &&
+        status != NftGalleryStatus.idle &&
+        status != NftGalleryStatus.loading;
+    final canRescan = status == NftGalleryStatus.loaded ||
+        status == NftGalleryStatus.empty ||
+        status == NftGalleryStatus.nothingToQuery;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -199,85 +224,84 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
           onChanged: (value) =>
               ref.read(preferencesProvider.notifier).setNftMedia(value),
           label: 'Show artwork',
-          description: kZuniaNftMediaPrivacyNote,
+          description: 'Images load from each token\'s host.',
         ),
-        if (mediaBlocked != null && prefs.nftMedia) ...[
+        // The empty state for "live reads off" already says so and offers
+        // Settings; repeating it here would be the same sentence twice.
+        if (mediaBlocked != null &&
+            prefs.nftMedia &&
+            status != NftGalleryStatus.readsDisabled) ...[
           const SizedBox(height: 8),
-          ZuniaCallout(
-            tone: ZuniaCalloutTone.info,
-            title: 'Artwork is still off',
-            body: mediaBlocked,
-          ),
-          if (!prefs.liveReads) ...[
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ZuniaButton(
-                label: 'Open Settings',
-                size: ZuniaButtonSize.sm,
-                variant: ZuniaButtonVariant.secondary,
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  mediaBlocked,
+                  style: zuniaSans(fontSize: 12, height: 1.4, color: s.fgMuted),
                 ),
               ),
-            ),
-          ],
-        ],
-        const SizedBox(height: 14),
-
-        // The grid renders the four "nothing to show" states through
-        // unsupportedReason / error / empty rather than one shared blank.
-        ZuniaNftGrid(
-          items: items,
-          loadMedia: mediaOn,
-          loading: state.busy,
-          unsupportedReason:
-              state.status == NftGalleryStatus.unsupported ? state.reason : null,
-          error: state.status == NftGalleryStatus.failed ? state.reason : null,
-          onRetry: state.status == NftGalleryStatus.failed ? _refresh : null,
-          emptyTitle: _emptyTitle(state.status),
-          emptyDescription: state.reason ??
-              'Nothing has been read for this address on this chain yet.',
-          onSelect: (item) {
-            final address = item.collectionAddress;
-            if (address == null) return;
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => NftDetailScreen(
-                  chainId: widget.chainId,
-                  collectionAddress: address,
-                  tokenId: item.tokenId,
+              if (!prefs.liveReads) ...[
+                const SizedBox(width: 8),
+                ZuniaButton(
+                  label: 'Open Settings',
+                  size: ZuniaButtonSize.sm,
+                  variant: ZuniaButtonVariant.secondary,
+                  onPressed: _openSettings,
                 ),
-              ),
-            );
-          },
-        ),
+              ],
+            ],
+          ),
+        ],
+        const SizedBox(height: 10),
 
-        if (state.status == NftGalleryStatus.loaded) ...[
-          const SizedBox(height: 12),
-          Text(
-            _coverageLine(state),
-            style: zuniaMono(fontSize: 10.5, height: 1.5, color: s.fgMuted),
+        if (showEmpty)
+          _emptyState(state, chainName)
+        else
+          ZuniaNftGrid(
+            items: items,
+            loadMedia: mediaOn,
+            loading: state.busy || status == NftGalleryStatus.idle,
+            onSelect: (item) {
+              final address = item.collectionAddress;
+              if (address == null) return;
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => NftDetailScreen(
+                    chainId: widget.chainId,
+                    collectionAddress: address,
+                    tokenId: item.tokenId,
+                  ),
+                ),
+              );
+            },
           ),
-        ],
-        if (state.limitation != null &&
-            state.status != NftGalleryStatus.unsupported &&
-            state.status != NftGalleryStatus.nothingToQuery) ...[
-          const SizedBox(height: 12),
-          ZuniaCallout(
-            tone: ZuniaCalloutTone.info,
-            title: 'This list is not complete',
-            body: state.limitation!,
-          ),
-        ],
-        if (state.detailBudgetSpent) ...[
-          const SizedBox(height: 12),
-          ZuniaCallout(
-            tone: ZuniaCalloutTone.info,
-            title: 'Some cards have no detail yet',
-            body: 'Every token found is listed, but names and artwork were '
-                'only read for the first $kNftTokenDetailBudget. Open a card '
-                'to read the rest of its detail.',
+
+        if (status == NftGalleryStatus.loaded || canRescan) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: status == NftGalleryStatus.loaded
+                    ? Text(
+                        _coverageLine(state),
+                        style: zuniaMono(
+                          fontSize: 10.5,
+                          height: 1.5,
+                          color: s.fgMuted,
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              if (canRescan)
+                // A scan is reused for hours; a collection minted since then
+                // should not need the user to wait that out.
+                ZuniaButton(
+                  label: 'Scan again',
+                  size: ZuniaButtonSize.sm,
+                  variant: ZuniaButtonVariant.secondary,
+                  onPressed: () => _refresh(force: true),
+                ),
+            ],
           ),
         ],
         for (final issue in state.issues) ...[
@@ -294,15 +318,8 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
           ),
         ],
 
-        const SizedBox(height: 20),
-        const ZuniaSectionLabel('Add a collection'),
-        const SizedBox(height: 8),
-        Text(
-          'CosmWasm has no chain-wide list of NFTs by owner, so Zunia can only '
-          'ask contracts it has an address for. Paste one and it is checked '
-          'for this address and remembered.',
-          style: zuniaSans(fontSize: 12, height: 1.5, color: s.fgMuted),
-        ),
+        const SizedBox(height: 24),
+        ZuniaSectionLabel('Add a collection', key: _addKey),
         const SizedBox(height: 10),
         ZuniaInput(
           controller: _address,
@@ -315,7 +332,7 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
         Align(
           alignment: Alignment.centerLeft,
           child: ZuniaButton(
-            label: 'Check this collection',
+            label: 'Check',
             size: ZuniaButtonSize.sm,
             variant: ZuniaButtonVariant.secondary,
             loading: _adding,
@@ -361,17 +378,70 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
               ),
             ),
         ],
-        if (kNftKnownCollections[widget.chainId] != null) ...[
-          const SizedBox(height: 8),
-          Text(
-            'This build also ships '
-            '${kNftKnownCollections[widget.chainId]!.length} '
-            'collection${kNftKnownCollections[widget.chainId]!.length == 1 ? '' : 's'} '
-            'for this chain.',
-            style: zuniaMono(fontSize: 10.5, color: s.fgDim),
-          ),
-        ],
       ],
+    );
+  }
+
+  /// Icon, short title, at most one line, and the one action that helps.
+  Widget _emptyState(NftGalleryState state, String chainName) {
+    final (title, description, action) = switch (state.status) {
+      NftGalleryStatus.unsupported => (
+          '$chainName doesn\'t support NFTs',
+          null,
+          null,
+        ),
+      NftGalleryStatus.readsDisabled => (
+          'Live reads are off',
+          'Turn them on in Settings to load NFTs.',
+          ZuniaButton(
+            label: 'Open Settings',
+            size: ZuniaButtonSize.sm,
+            variant: ZuniaButtonVariant.secondary,
+            onPressed: _openSettings,
+          ),
+        ),
+      NftGalleryStatus.noAccount => (
+          'No address on $chainName',
+          'Enable the network first.',
+          null,
+        ),
+      NftGalleryStatus.failed ||
+      NftGalleryStatus.noEndpoint =>
+        (
+          'Couldn\'t reach $chainName',
+          state.reason,
+          ZuniaButton(
+            label: 'Try again',
+            size: ZuniaButtonSize.sm,
+            variant: ZuniaButtonVariant.secondary,
+            onPressed: _refresh,
+          ),
+        ),
+      NftGalleryStatus.supportUnknown => (
+          'Couldn\'t check $chainName',
+          state.reason,
+          ZuniaButton(
+            label: 'Try again',
+            size: ZuniaButtonSize.sm,
+            variant: ZuniaButtonVariant.secondary,
+            onPressed: _refresh,
+          ),
+        ),
+      _ => (
+          'No NFTs yet',
+          'Collectibles you own on $chainName show up here.',
+          ZuniaButton(
+            label: 'Add a collection',
+            size: ZuniaButtonSize.sm,
+            variant: ZuniaButtonVariant.secondary,
+            onPressed: _focusAdd,
+          ),
+        ),
+    };
+    return ZuniaEmptyState(
+      title: title,
+      description: description,
+      action: action,
     );
   }
 
@@ -388,30 +458,13 @@ class _NftGalleryViewState extends ConsumerState<NftGalleryView> {
     return resolved.urls.isEmpty ? null : resolved.urls.first;
   }
 
-  String _emptyTitle(NftGalleryStatus status) => switch (status) {
-        NftGalleryStatus.empty => 'Nothing in the collections checked',
-        NftGalleryStatus.nothingToQuery => 'Nothing was checked',
-        NftGalleryStatus.readsDisabled => 'Nothing was read',
-        NftGalleryStatus.noEndpoint => 'This chain cannot be read',
-        NftGalleryStatus.noAccount => 'No address on this chain',
-        NftGalleryStatus.supportUnknown => 'Zunia cannot tell yet',
-        NftGalleryStatus.loading => 'Looking…',
-        _ => 'Nothing to show yet',
-      };
-
+  /// One subtle line: how much was checked, and how to widen it.
   String _coverageLine(NftGalleryState state) {
-    final where = state.complete
-        ? 'An indexer answered, so this covers every collection it knows of.'
-        : 'Read from ${state.contractsQueried} '
-            '${state.contractsQueried == 1 ? 'collection' : 'collections'} '
-            'Zunia knows about.';
-    final paths = state.sources
-        .map((source) => switch (source) {
-              NftDiscoverySource.known => 'shipped list',
-              NftDiscoverySource.user => 'addresses you added',
-              NftDiscoverySource.indexer => 'indexer',
-            })
-        .join(', ');
-    return paths.isEmpty ? where : '$where Source: $paths.';
+    if (state.complete) return 'Indexed collections';
+    final n = state.contractsQueried;
+    final checked = '$n ${n == 1 ? 'collection' : 'collections'} checked';
+    return state.limitation == null
+        ? checked
+        : '$checked \u00b7 Add a missing one below';
   }
 }

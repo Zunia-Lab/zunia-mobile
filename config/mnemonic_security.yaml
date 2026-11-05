@@ -1,8 +1,10 @@
-# Mnemonic / key UX security policy (config only — enforce in UI later)
+# Mnemonic / key UX security policy. Mirrored as typed constants in
+# lib/security/mnemonic_security_config.dart, which is what the app reads.
 
 schema_version: 1
 
 screenshots:
+  # On the phrase and unlock screens only, so a receive QR stays shareable.
   android_flag_secure: true
   ios_detect_screen_capture: true
   ios_blur_on_screenshot_notification: true
@@ -17,7 +19,8 @@ display:
 
 clipboard:
   allow_mnemonic_copy_default: true
-  if_allowed_auto_clear_seconds: 45
+  # Same as the extension (SENSITIVE_CLIPBOARD_MS). Also cleared on lock.
+  if_allowed_auto_clear_seconds: 30
   warn_before_copy: false
 
 input:

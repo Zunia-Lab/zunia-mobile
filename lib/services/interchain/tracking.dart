@@ -1425,8 +1425,11 @@ Future<RouteTrace> trackRoute(
     // of the delivery that triggered it.
     if (hop.channelId.isEmpty) {
       final previous = index == 0 || traces.isEmpty ? null : traces.last;
+      // A swap that opens the route (a crosschain-swaps call signed on the
+      // venue itself) ran inside the source transaction, which was found and
+      // emitted the onward packet: it is done.
       final derived = index == 0
-          ? PacketStatus.pending
+          ? PacketStatus.acknowledged
           : previous == null
               ? PacketStatus.unknown
               : (previous.status == PacketStatus.acknowledged ||

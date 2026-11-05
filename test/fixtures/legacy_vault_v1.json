@@ -1,0 +1,36 @@
+{
+  "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "password": "legacy-pass-1234",
+  "kernelInner": {
+    "prefs": {
+      "zunia.keystore.envelope": "{\"v\":1,\"wrapped\":true,\"ct\":\"khhbjuB61lrLbSU/lqEx1i5aTAnkBLGLGf5rAKIfyRCISEyG4SuFTociPTSMtm+BflRUX6dM5chVvCBesU7HQohfTI+wM51Nxid+bdLiaII4FxpStEXm0VXgIBfhX59C0xhO0qA4jgCUd3ptibZqhiobQBLkE+XcFPxmUeZR21XZCQ/HsGfQW8YqPTSYsm7QfElGEucQ4tUR/jUC4VeNAY0NTN6iPIsMwHt7bImyOYIqShBKvE/jh0apO1e0EcdCilNdg/d7y1DdOz00mLI71C4aThvnFeWARf46BrcG31neCRjSqj3cUcAufGvf4WyKf0pFT+ESsodD+jcBuQPfUYxeS4qmP4tTlXYrN4yxPNF8TRAd4ETj3RH9ZAXlBdME3VsciKE5jgOdfy02i+dug3seFBjmFe7RQ68xAOULiQWPAxWO9zqMVJwsKjiO4G6AfUETTbIX5NAT+mcAsQXcU4gCFYmiaoZXxHoqN9vmbdF9GkYYtU7k3BP9ZFy0BtNY2Aoe3fE53FHBLCY7ibJq1y1ATxm0EO/QRak0ArlW3lHcXxzZqzGPF4ltcmvO4j7TPBlUEf5UuIUaqSBeon6KCYcYUJY=\",\"mac\":\"+8PTif2C4z8FMz1XdIS9Q2oowjAFw+RwYJICTZu++FA=\"}",
+      "zunia.keystore.backup_verified": true,
+      "zunia.wallet.accounts": "[{\"id\":\"acct-0\",\"name\":\"Main\",\"index\":0},{\"id\":\"acct-1\",\"name\":\"Account 2\",\"index\":1}]",
+      "zunia.wallet.activeAccount": "acct-1",
+      "zunia.wallet.enabledChains": [
+        "safrochain-1",
+        "osmosis-1"
+      ]
+    },
+    "secure": {
+      "zunia.keystore.wrapping_key": "Nk+1ZFiDzcbNI9YZJQStonPWEhMAk4USDMms4JP18CY=",
+      "zunia.keystore.bio_unlock_secret": "pSHURC8iLMgbydfFrcGHtjUHbKrOixLo4iPdITrqbkc=",
+      "zunia.keystore.bio_password": "legacy-pass-1234"
+    }
+  },
+  "fallbackInner": {
+    "prefs": {
+      "zunia.keystore.envelope": "{\"v\":1,\"wrapped\":true,\"ct\":\"77oD7rIPV0KxGiiS1uDKZ5L/YFuIXspWkBdfMagETgumrUPupBwIAbwCbYrOs+BSs6hnQpIAjE/PAHRkxhBqL9+sAvG1HFdCswJtis6U5UuS7DxAyADJHKIUeTvNPH5Z8tkaobF0HVCdWXvxv/CebaTdTSC1YMEprTN0K/MjVBDD6Teh618yA6AQK4ivq8Q4nbFdDN9W+jeaAgsDzDVzONDSM53vUDBZnwAB0YOF/HCe9nUayQLPMLIMbQq8M3ZB1d0BusBTEy2GVGOSgaPFKsu8TQ66VOtPuwhYJ+c4ZVj53jD73EQ1E6odGcGHteV8qPU6Mola7x3IVQcZyEoEFw==\",\"mac\":\"8FxObnZr/xpssi1BfBkuaHVw17MV0B/t3ZTkAL7kx/g=\"}",
+      "zunia.keystore.backup_verified": false,
+      "zunia.wallet.accounts": "[{\"id\":\"acct-0\",\"name\":\"Dev\",\"index\":0}]",
+      "zunia.wallet.activeAccount": "acct-0",
+      "zunia.wallet.enabledChains": [
+        "safrochain-1"
+      ]
+    },
+    "secure": {
+      "zunia.keystore.wrapping_key": "nj+dJCg46l9ZDEAtbuHNZmgCJdBHHb2P1FuBW5BcJWE=",
+      "zunia.keystore.bio_unlock_secret": "FymYrwJz15tG6b4cXE387xNfgV7+nmJD5+APNgfdXK0="
+    }
+  }
+}

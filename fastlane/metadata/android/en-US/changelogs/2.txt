@@ -1,0 +1,1 @@
+First release of Zunia for Android: a self-custody wallet for 220+ Cosmos networks. Send, receive, swap, bridge over IBC, stake and vote; open web apps in the built-in browser, or connect a website on your computer by scanning its QR code.

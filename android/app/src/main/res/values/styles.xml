@@ -1,12 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Shown by the system before Flutter draws: the mark on the launch
+         background, centred on the whole screen at 96 x 120dp, which is where
+         Flutter's SplashScreen paints it in its first frame.
+         Light/dark comes from the night-qualified colours, so these styles only
+         vary by API level: values-v27 adds light navigation bar icons and
+         values-v31 the Android 12 splash screen. Keep the three LaunchThemes in
+         step; NormalTheme is the same on every level. -->
     <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <item name="android:windowBackground">@drawable/launch_background</item>
         <item name="android:windowFullscreen">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:statusBarColor">@color/zunia_splash_bg</item>
-        <item name="android:navigationBarColor">@color/zunia_splash_bg</item>
+        <item name="android:windowLightStatusBar">@bool/zunia_light_system_bars</item>
     </style>
+    <!-- Applied in onCreate (io.flutter.embedding.android.NormalTheme). Flutter
+         holds the window's first draw until its own first frame, so the launch
+         window stays up until then and this background never shows at start. -->
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
-        <item name="android:windowBackground">@color/zunia_splash_bg</item>
+        <item name="android:windowBackground">@color/zunia_window_bg</item>
     </style>
 </resources>

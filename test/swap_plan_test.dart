@@ -1,9 +1,9 @@
-/// The whole swap pipeline, offline: discovery, denom arithmetic, memo, quote.
+/// The whole swap pipeline, offline: the lists, the path each pair takes, the
+/// fee, the plan and price, and the exact messages each path signs.
 ///
-/// This is the test that would have caught a client stitching the engine
-/// together wrongly — the memo is asserted byte for byte against the shape
-/// INTERCHAIN-SPEC.md documents, and the ICS20 receiver against the ibc-hooks
-/// rule that the packet must be addressed to the contract.
+/// Real bundled data (catalog, token table, swap-fee.json, interchain.json)
+/// and the contract's real route table; every chain endpoint and the SQS
+/// router are scripted, so nothing here touches the network.
 library;
 
 import 'dart:convert';
@@ -11,424 +11,639 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/services/interchain/denom.dart';
-import 'package:zunia_mobile/services/interchain/lcd.dart';
-import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
-import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/swap/pool_swap.dart';
+import 'package:zunia_mobile/swap/swap_data.dart';
+import 'package:zunia_mobile/swap/swap_fee.dart';
+import 'package:zunia_mobile/swap/swap_path.dart';
+import 'package:zunia_mobile/swap/swap_review.dart';
+import 'package:zunia_mobile/swap/xcs_routes.dart';
+import 'package:zunia_mobile/tx/tx_msg.dart';
 
-/// A 12-word test mnemonic. Not a wallet anyone funds.
-const _phrase =
-    'abandon abandon abandon abandon abandon abandon abandon abandon '
-    'abandon abandon abandon about';
-
-const _xcs = 'osmo1xcscontract';
-
-/// Source chain -> Osmosis over channel-3 / channel-99, Osmosis -> dest over
-/// channel-42 / channel-7. Only these four ids exist in this world.
-class _FakeLcd implements LcdClient {
-  _FakeLcd(this.chainId, this.calls);
-
-  @override
-  final String chainId;
-  final List<String> calls;
-
-  @override
-  Future<Object?> getJson(String path, [LcdRequestOptions? options]) async {
-    calls.add('$chainId$path');
-
-    if (path == '/ibc/core/channel/v1/channels') {
-      return {
-        'channels': [
-          if (chainId == 'source-1')
-            _channel('channel-3', 'connection-0', 'channel-99'),
-          if (chainId == 'osmosis-1') ...[
-            _channel('channel-99', 'connection-5', 'channel-3'),
-            _channel('channel-42', 'connection-6', 'channel-7'),
-          ],
-        ],
-        'pagination': {'next_key': null},
-      };
-    }
-    if (path.startsWith('/ibc/core/connection/v1/connections/')) {
-      return {
-        'connection': {'client_id': '07-${path.split('/').last}'},
-      };
-    }
-    if (path.startsWith('/ibc/core/client/v1/client_states/')) {
-      const targets = {
-        '07-connection-0': 'osmosis-1',
-        '07-connection-5': 'source-1',
-        '07-connection-6': 'dest-1',
-      };
-      return {
-        'client_state': {'chain_id': targets[path.split('/').last]},
-      };
-    }
-    if (path.startsWith('/cosmwasm/wasm/v1/contract/')) {
-      return {
-        'contract_info': {'code_id': '1'},
-      };
-    }
-    // Every module probe answers "no such route", which the engine reads as
-    // unconfirmed rather than as unsupported.
-    throw InterchainError(
-      InterchainErrorCode.lcdUnreachable,
-      'no route',
-      chainId: chainId,
-      httpStatus: 404,
-    );
-  }
-
-  static Map<String, Object?> _channel(
-    String id,
-    String connection,
-    String counterparty,
-  ) =>
-      {
-        'channel_id': id,
-        'port_id': 'transfer',
-        'state': 'STATE_OPEN',
-        'connection_hops': [connection],
-        'counterparty': {'channel_id': counterparty, 'port_id': 'transfer'},
-      };
-}
-
-/// The SQS router, answering the one quote this test asks for.
-class _FakeRouter implements LcdClient {
-  _FakeRouter(this.seen);
-
-  final Map<String, Object?> seen;
-
-  @override
-  String get chainId => 'osmosis-1';
-
-  @override
-  Future<Object?> getJson(String path, [LcdRequestOptions? options]) async {
-    seen.addAll(options?.query ?? const {});
-    return {
-      'amount_in': {'denom': 'ibc/IN', 'amount': '1000000'},
-      'amount_out': '2200000',
-      'route': [
-        {
-          'pools': [
-            {'id': 1400, 'type': 2, 'token_out_denom': 'ibc/OUT'},
-          ],
-          'in_amount': '1000000',
-          'out_amount': '2200000',
-        },
-      ],
-      'effective_fee': '0.002',
-      'price_impact': '-0.0004',
-      'in_base_out_quote_spot_price': '2.2',
-    };
-  }
-}
-
-/// An endpoint that answers nothing at all.
-class _DeadLcd implements LcdClient {
-  _DeadLcd(this.chainId);
-
-  @override
-  final String chainId;
-
-  @override
-  Future<Object?> getJson(String path, [LcdRequestOptions? options]) async {
-    throw InterchainError(
-      InterchainErrorCode.lcdUnreachable,
-      'endpoint down',
-      chainId: chainId,
-    );
-  }
-}
-
-class _Registry implements ChainRegistry {
-  const _Registry();
-
-  static const _chains = {
-    'source-1': ChainInfo(
-      chainId: 'source-1',
-      chainName: 'Source',
-      bech32Prefix: 'src',
-      coinMinimalDenom: 'usrc',
-      rest: 'http://127.0.0.1:1',
-    ),
-    'osmosis-1': ChainInfo(
-      chainId: 'osmosis-1',
-      chainName: 'Osmosis',
-      bech32Prefix: 'osmo',
-      coinMinimalDenom: 'uosmo',
-      rest: 'http://127.0.0.1:1',
-      features: ['cosmwasm'],
-    ),
-    'dest-1': ChainInfo(
-      chainId: 'dest-1',
-      chainName: 'Dest',
-      bech32Prefix: 'dst',
-      coinMinimalDenom: 'udst',
-      rest: 'http://127.0.0.1:1',
-    ),
-  };
-
-  @override
-  ChainInfo? get(String chainId) => _chains[chainId];
-
-  @override
-  List<ChainInfo> list() => _chains.values.toList();
-}
-
-ChainEntry _entry(String id, String denom, String prefix) => ChainEntry(
-      chainId: id,
-      chainName: id,
-      bech32Prefix: prefix,
-      coinType: 118,
-      network: 'mainnet',
-      coinDenom: denom,
-      coinMinimalDenom: 'u${denom.toLowerCase()}',
-      coinDecimals: 6,
-      feeDenom: denom,
-      feeMinimalDenom: 'u${denom.toLowerCase()}',
-      feeDecimals: 6,
-      rest: 'http://127.0.0.1:1',
-    );
+import 'support/swap_fixtures.dart';
+import 'support/swap_world.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(loadSwapWorld);
 
-  final from = ChainAccount(
-    chain: _entry('source-1', 'SRC', 'src'),
-    address: 'src1sender',
-  );
-  final to = ChainAccount(
-    chain: _entry('dest-1', 'DST', 'dst'),
-    address: 'dst1recipient',
-  );
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  setUp(() async {
-    SharedPreferences.setMockInitialValues({});
-    // The controller derives the recovery address on the venue chain through
-    // the catalog, so the real one is loaded here.
-    await ChainCatalog.load();
+  group('the lists', () {
+    test(
+      'sell what is held, one row per chain and exact denom, named by identity',
+      () async {
+        final view = await settle(world());
+        expect(view.sources.map((a) => a.key), [
+          'cosmoshub-4:uatom',
+          'osmosis-1:uosmo',
+        ]);
+        expect(view.sources.first.ticker, 'ATOM');
+        expect(view.sources.first.held, isTrue);
+      },
+    );
+
+    test(
+      'buy held tokens, chain coins, Osmosis tokens and their homes, the From itself refused',
+      () async {
+        final view = await settle(world());
+        final keys = view.destinations.map((a) => a.key).toSet();
+        expect(keys, contains('osmosis-1:uosmo'));
+        expect(keys, contains('osmosis-1:$usdcInj'));
+        // USDC.inj delivered home to Injective, as its exact erc20 denom.
+        expect(keys, contains('injective-1:$usdcInjOrigin'));
+        final self = view.destinations.firstWhere(
+          (a) => a.key == 'cosmoshub-4:uatom',
+        );
+        expect(self.disabledReason, selfReason);
+        expect(self.searchOnly, isTrue);
+        // ATOM on Osmosis is the same asset: Send moves it.
+        final voucher = view.destinations.firstWhere(
+          (a) => a.key == 'osmosis-1:$atomOnOsmosis',
+        );
+        expect(voucher.disabledReason, sameTokenReason);
+      },
+    );
   });
 
-  ({ProviderContainer container, List<String> calls, Map<String, Object?> query})
-      harness() {
-    final calls = <String>[];
-    final query = <String, Object?>{};
-    final container = ProviderContainer(
-      overrides: [
-        interchainRegistryProvider.overrideWithValue(const _Registry()),
-        lcdFactoryProvider.overrideWithValue(
-          (chain) => _FakeLcd(chain.chainId, calls),
-        ),
-        swapRouterClientProvider.overrideWithValue(_FakeRouter(query)),
-        swapVenueStatusProvider.overrideWith(
-          (_) async => const SwapVenueStatus.ready(
-            chainId: 'osmosis-1',
-            contractAddress: _xcs,
-          ),
-        ),
-      ],
+  group('which way each pair goes', () {
+    Future<SwapView> pick(ProviderContainer c, String from, String to) async {
+      await settle(c);
+      c.read(swapControllerProvider.notifier)
+        ..pickFrom(from)
+        ..pickTo(to);
+      return c.read(swapViewProvider);
+    }
+
+    test(
+      'funds elsewhere go through the contract when its table has the pair',
+      () async {
+        final view = await pick(
+          world(),
+          'cosmoshub-4:uatom',
+          'osmosis-1:uosmo',
+        );
+        expect(view.to!.executable, Executable.yes);
+        expect(view.path, SwapPath.contract);
+      },
     );
-    addTearDown(container.dispose);
-    return (container: container, calls: calls, query: query);
-  }
 
-  test('plans, prices and composes one signable transfer', () async {
-    final h = harness();
-    final controller = h.container.read(swapControllerProvider.notifier);
-
-    await controller.plan(
-      from: from,
-      to: to,
-      amountBaseUnits: '1000000',
-      phrase: _phrase,
+    test(
+      'funds elsewhere move to Osmosis first when the contract cannot swap the pair',
+      () async {
+        final view = await pick(
+          world(),
+          'cosmoshub-4:uatom',
+          'osmosis-1:$usdcInj',
+        );
+        expect(view.to!.executable, Executable.no);
+        expect(view.path, SwapPath.moveFirst);
+      },
     );
-    final state = h.container.read(swapControllerProvider);
 
-    expect(state.planError, isNull, reason: state.planError ?? '');
-    expect(state.quoteError, isNull, reason: state.quoteError ?? '');
-    expect(state.blockedReason, isNull, reason: state.blockedReason ?? '');
-    expect(state.ready, isTrue);
+    test(
+      'funds on Osmosis swap in the pools, or through the contract when it delivers elsewhere',
+      () async {
+        expect(
+          (await pick(world(), 'osmosis-1:uosmo', 'osmosis-1:$usdcInj')).path,
+          SwapPath.pool,
+        );
+        expect(
+          (await pick(world(), 'osmosis-1:uosmo', 'cosmoshub-4:uatom')).path,
+          SwapPath.contract,
+        );
+        expect(
+          (await pick(
+            world(),
+            'osmosis-1:uosmo',
+            'injective-1:$usdcInjOrigin',
+          )).path,
+          SwapPath.poolDeliver,
+        );
+        // Without a table nothing is known: funds on Osmosis use the pools.
+        expect(
+          (await pick(
+            world(tableGiven: false),
+            'osmosis-1:uosmo',
+            'cosmoshub-4:uatom',
+          )).path,
+          SwapPath.poolDeliver,
+        );
+      },
+    );
+  });
 
-    final candidate = state.candidate!;
-    // One signature, on the source chain, over one hop.
-    expect(candidate.plan.hops.first.chainId, 'source-1');
-    expect(candidate.plan.hops.first.channelId, 'channel-3');
-    // ibc-hooks only runs when the ICS20 receiver is "" or the contract.
-    expect(candidate.receiver, _xcs);
-    expect(candidate.plan.requiresIbcHooks, isTrue);
-    expect(candidate.plan.requiresPfm, isFalse);
-
-    final memo = jsonDecode(candidate.plan.memo) as Map<String, Object?>;
-    final wasm = memo['wasm']! as Map<String, Object?>;
-    expect(memo.keys.toList(), ['wasm']);
-    expect(wasm.keys.toList()..sort(), ['contract', 'msg']);
-    expect(wasm['contract'], _xcs);
-
-    final swap = (wasm['msg']! as Map<String, Object?>)['osmosis_swap']!
-        as Map<String, Object?>;
-    // The output denom is the destination token as *Osmosis* names it: the
-    // hash of Osmosis's own receiving channel, not the name dest-1 uses.
-    expect(swap['output_denom'], ibcDenomHash('transfer/channel-42', 'udst'));
-    expect(swap['receiver'], 'dst1recipient');
-    // Recovery is set, so stranded output can be claimed.
-    final recovery = swap['on_failed_delivery']! as Map<String, Object?>;
-    expect(recovery['local_recovery_addr'], startsWith('osmo1'));
-    expect(swap['next_memo'], isNull);
-    // The window is omitted, so the contract's own default applies.
-    expect(swap['slippage'], {
-      'twap': {'slippage_percentage': '1'},
+  group('the form', () {
+    test('says what to do next, one thing at a time', () async {
+      final c = world();
+      await settle(c);
+      final controller = c.read(swapControllerProvider.notifier)
+        ..pickFrom('osmosis-1:uosmo')
+        ..pickTo('osmosis-1:$usdcInj');
+      var view = c.read(swapViewProvider);
+      expect(view.blockedReason, 'Enter an amount to swap.');
+      controller.setAmount('0', view.from!);
+      expect(
+        c.read(swapViewProvider).blockedReason,
+        'Enter an amount above zero.',
+      );
+      controller.setAmount('1.0000001', view.from!);
+      expect(
+        c.read(swapViewProvider).blockedReason,
+        'That amount is not a number this chain can hold.',
+      );
+      controller.setAmount('50', view.from!);
+      expect(
+        c.read(swapViewProvider).blockedReason,
+        'More than the OSMO left after the network fee.',
+      );
+      controller.setAmount('10', view.from!);
+      view = c.read(swapViewProvider);
+      expect(view.blockedReason, isNull);
+      expect(view.planning, isTrue);
+      expect(view.planKey, isNotEmpty);
     });
 
-    // The venue was asked to price the denom as it holds it.
-    expect(h.query['tokenIn'],
-        '1000000${ibcDenomHash('transfer/channel-99', 'usrc')}');
-    expect(h.query['tokenOutDenom'], ibcDenomHash('transfer/channel-42', 'udst'));
-
-    // The quote is the venue's, and the floor is derived from it.
-    expect(state.quote!.outputAmount, '2200000');
-    expect(state.quote!.minReceived, '2178000');
-    expect(state.quote!.poolFee, closeTo(0.2, 0.0001));
-    expect(state.quote!.priceImpact, closeTo(0.04, 0.0001));
-
-    // The memo the user approves is read back from the memo itself.
-    expect(state.memoInspection!.summary, contains('swaps to'));
-    expect(state.memoInspection!.summary, contains('Recovery address'));
-  });
-
-  test('a locked wallet is planned and priced but never offered for signing',
+    test(
+      'charges 0.5% of the amount typed, in the token sold, to the signing chain\'s treasury',
       () async {
-    final h = harness();
-    await h.container.read(swapControllerProvider.notifier).plan(
-          from: from,
-          to: to,
-          amountBaseUnits: '1000000',
-        );
-    final state = h.container.read(swapControllerProvider);
-
-    // The route and the price are still shown — the user learns something.
-    expect(state.candidate, isNotNull);
-    // But an unrecoverable swap is not signable.
-    expect(state.ready, isFalse);
-    expect(state.blockedReason, contains('recover the swap output'));
-  });
-
-  test('the same chain twice is refused with a reason', () async {
-    final h = harness();
-    await h.container.read(swapControllerProvider.notifier).plan(
-          from: from,
-          to: from,
-          amountBaseUnits: '1000000',
-          phrase: _phrase,
-        );
-    final state = h.container.read(swapControllerProvider);
-    expect(state.candidate, isNull);
-    expect(state.blockedReason, contains('two different networks'));
-  });
-
-  test('no amount means no quote, and the reason says so', () async {
-    final h = harness();
-    await h.container.read(swapControllerProvider.notifier).plan(
-          from: from,
-          to: to,
-          amountBaseUnits: '',
-          phrase: _phrase,
-        );
-    final state = h.container.read(swapControllerProvider);
-    expect(state.quote, isNull);
-    expect(state.blockedReason, 'Enter an amount to swap.');
-  });
-
-  test('an unconfigured contract stops the flow before any chain read',
-      () async {
-    final calls = <String>[];
-    final container = ProviderContainer(
-      overrides: [
-        interchainRegistryProvider.overrideWithValue(const _Registry()),
-        lcdFactoryProvider.overrideWithValue(
-          (chain) => _FakeLcd(chain.chainId, calls),
-        ),
-        swapVenueStatusProvider.overrideWith(
-          (_) async => const SwapVenueStatus.unavailable('no address in build'),
-        ),
-      ],
-    );
-    addTearDown(container.dispose);
-
-    await container.read(swapControllerProvider.notifier).plan(
-          from: from,
-          to: to,
-          amountBaseUnits: '1000000',
-          phrase: _phrase,
-        );
-    final state = container.read(swapControllerProvider);
-    expect(state.blockedReason, 'no address in build');
-    expect(state.candidate, isNull);
-    // Nothing was discovered, quoted or read: the feature is off, not degraded.
-    expect(calls, isEmpty);
-  });
-
-  test('typed channels alone build a route when discovery finds nothing',
-      () async {
-    // Every read fails: a chain whose endpoint cannot list its channels, which
-    // is the case this whole override mechanism exists for.
-    final container = ProviderContainer(
-      overrides: [
-        interchainRegistryProvider.overrideWithValue(const _Registry()),
-        lcdFactoryProvider.overrideWithValue((chain) => _DeadLcd(chain.chainId)),
-        swapRouterClientProvider.overrideWithValue(_FakeRouter({})),
-        swapVenueStatusProvider.overrideWith(
-          (_) async => const SwapVenueStatus.ready(
-            chainId: 'osmosis-1',
-            contractAddress: _xcs,
+        final c = world();
+        await settle(c);
+        c.read(swapControllerProvider.notifier)
+          ..pickFrom('cosmoshub-4:uatom')
+          ..pickTo('osmosis-1:uosmo');
+        c
+            .read(swapControllerProvider.notifier)
+            .setAmount('1', c.read(swapViewProvider).from!);
+        final view = c.read(swapViewProvider);
+        expect(view.amountUnits, BigInt.from(1000000));
+        expect(
+          view.fee,
+          SwapFee(
+            bps: 50,
+            fee: BigInt.from(5000),
+            net: BigInt.from(995000),
+            recipient: data.fees.recipients['cosmoshub-4'],
           ),
-        ),
-      ],
+        );
+        expect(swapFeeLine(view.fee, view.from!.identity), (
+          label: 'Zunia fee',
+          value: '0.5% · 0.005 ATOM',
+        ));
+      },
     );
-    addTearDown(container.dispose);
 
-    final controller = container.read(swapControllerProvider.notifier);
-    controller
-      ..setOverride(0, 'channel-3',
-          fromChainId: 'source-1', toChainId: 'osmosis-1')
-      ..setOverride(1, 'channel-42',
-          fromChainId: 'osmosis-1', toChainId: 'dest-1');
-    await controller.plan(
-      from: from,
-      to: to,
-      amountBaseUnits: '1000000',
-      phrase: _phrase,
+    test(
+      'reads a typed amount only with the exponent it was typed for',
+      () async {
+        final c = world();
+        await settle(c);
+        final controller = c.read(swapControllerProvider.notifier)
+          ..pickFrom('cosmoshub-4:uatom');
+        controller.setAmount('2', c.read(swapViewProvider).from!);
+        expect(c.read(swapViewProvider).amountUnits, BigInt.from(2000000));
+        controller.pickFrom('osmosis-1:uosmo');
+        expect(c.read(swapViewProvider).amountText, '');
+        expect(c.read(swapViewProvider).amountUnits, isNull);
+      },
     );
-    final state = container.read(swapControllerProvider);
 
-    expect(state.candidate, isNotNull, reason: state.blockedReason ?? '');
-    expect(state.candidate!.plan.hops.first.channelId, 'channel-3');
-    expect(state.candidate!.receiver, _xcs);
-    // The user is told these channels are their own word, not the chain's.
-    expect(
-      state.warnings.any((w) => w.contains('entered by hand')),
-      isTrue,
+    test(
+      'Max leaves room for the network fee when it is paid in the token sold',
+      () async {
+        final c = world();
+        final view = await settle(c);
+        c.read(swapControllerProvider.notifier).applyMax(view);
+        final after = c.read(swapViewProvider);
+        expect(after.amountUnits, after.spendable);
+        expect(after.spendable! < BigInt.from(10000000), isTrue);
+        expect(after.overBalance, isFalse);
+      },
+    );
+
+    test('only a held To can become the From', () async {
+      final c = world();
+      await settle(c);
+      final controller = c.read(swapControllerProvider.notifier)
+        ..pickFrom('cosmoshub-4:uatom')
+        ..pickTo('osmosis-1:$usdcInj');
+      expect(controller.flip(c.read(swapViewProvider)), isFalse);
+      controller.pickTo('osmosis-1:uosmo');
+      expect(controller.flip(c.read(swapViewProvider)), isTrue);
+      expect(c.read(swapViewProvider).from!.key, 'osmosis-1:uosmo');
+      expect(c.read(swapViewProvider).to!.key, 'cosmoshub-4:uatom');
+    });
+
+    test(
+      'a contract that cannot be confirmed blocks the contract path, never the pools',
+      () async {
+        final off = const SwapVenueStatus.unavailable(
+          'No crosschain-swaps contract this release names exists on Osmosis.',
+        );
+        final c = world(venue: off, tableGiven: false);
+        await settle(c);
+        final controller = c.read(swapControllerProvider.notifier)
+          ..pickFrom('cosmoshub-4:uatom')
+          ..pickTo('osmosis-1:uosmo');
+        controller.setAmount('1', c.read(swapViewProvider).from!);
+        expect(c.read(swapViewProvider).blockedReason, off.reason);
+        expect(c.read(swapViewProvider).planKey, isEmpty);
+        controller
+          ..pickFrom('osmosis-1:uosmo')
+          ..pickTo('osmosis-1:$usdcInj');
+        controller.setAmount('1', c.read(swapViewProvider).from!);
+        expect(c.read(swapViewProvider).blockedReason, isNull);
+        expect(c.read(swapViewProvider).planKey, isNotEmpty);
+      },
+    );
+
+    test(
+      'slippage outside 0 to 50% is refused before anything is planned',
+      () async {
+        final c = world();
+        await settle(c);
+        await c
+            .read(swapSettingsProvider.notifier)
+            .update(const SwapSettings(slippagePercent: 60));
+        final controller = c.read(swapControllerProvider.notifier)
+          ..pickFrom('osmosis-1:uosmo')
+          ..pickTo('osmosis-1:$usdcInj');
+        controller.setAmount('1', c.read(swapViewProvider).from!);
+        expect(
+          c.read(swapViewProvider).blockedReason,
+          contains('Slippage must be between 0 and 50%'),
+        );
+      },
     );
   });
 
-  test('a manual channel overrides what discovery found', () async {
-    final h = harness();
-    final controller = h.container.read(swapControllerProvider.notifier);
-    controller.setOverride(0, '777');
-    await controller.plan(
-      from: from,
-      to: to,
-      amountBaseUnits: '1000000',
-      phrase: _phrase,
+  group('what each path signs', () {
+    test(
+      'pool: [poolmanager swap of what is left after the fee, fee]',
+      () async {
+        final c = world();
+        final view = await plan(
+          c,
+          from: 'osmosis-1:uosmo',
+          to: 'osmosis-1:$usdcInj',
+          amount: '10',
+        );
+        expect(view.ready, isTrue, reason: view.blockedReason ?? '');
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view);
+        final msgs = prepared.msgs;
+        expect(msgs.map((m) => m.typeUrl), [
+          poolSplitSwapTypeUrl,
+          bankSendTypeUrl,
+        ]);
+        expect(msgs[0].value['token_in_denom'], 'uosmo');
+        expect(msgs[0].value['sender'], osmoMe);
+        // 10 OSMO typed: 0.05 OSMO fee, 9.95 OSMO swapped; floor 1% under 4.975.
+        final sold = (msgs[0].value['routes'] as List).fold<BigInt>(
+          BigInt.zero,
+          (sum, r) =>
+              sum + BigInt.parse((r as Map)['token_in_amount'] as String),
+        );
+        expect(sold, BigInt.from(9950000));
+        expect(msgs[0].value['token_out_min_amount'], '4925250');
+        expect(msgs[1].value, {
+          'from_address': osmoMe,
+          'to_address': data.fees.recipients['osmosis-1'],
+          'amount': [
+            {'denom': 'uosmo', 'amount': '50000'},
+          ],
+        });
+        expect(prepared.memo, 'Swap OSMO to USDC.inj · by Zunia-wallet');
+        expect(
+          reviewProblems(
+            prepared.review,
+            msgs: msgs,
+            chainId: 'osmosis-1',
+            policy: data.fees,
+            book: data.book,
+            now: DateTime.now(),
+            venueChainId: 'osmosis-1',
+          ),
+          isEmpty,
+        );
+      },
     );
-    final state = h.container.read(swapControllerProvider);
-    expect(state.candidate!.plan.hops.first.channelId, 'channel-777');
+
+    test(
+      'pool-deliver: [swap, fee, transfer of exactly the floor home to Injective]',
+      () async {
+        final c = world(
+          enabled: const ['cosmoshub-4', 'osmosis-1', 'injective-1'],
+        );
+        final view = await plan(
+          c,
+          from: 'osmosis-1:uosmo',
+          to: 'injective-1:$usdcInjOrigin',
+          amount: '10',
+        );
+        expect(view.path, SwapPath.poolDeliver);
+        expect(view.ready, isTrue, reason: view.blockedReason ?? '');
+        expect(view.delivery?.sourceChannel, 'channel-122');
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view);
+        final msgs = prepared.msgs;
+        expect(msgs.map((m) => m.typeUrl), [
+          poolSplitSwapTypeUrl,
+          bankSendTypeUrl,
+          transferTypeUrl,
+        ]);
+        final floor = msgs[0].value['token_out_min_amount'];
+        expect(msgs[2].value['token'], {'denom': usdcInj, 'amount': floor});
+        expect(msgs[2].value['source_channel'], 'channel-122');
+        expect(msgs[2].value['receiver'], injMe);
+        expect(msgs[2].value['sender'], osmoMe);
+        expect(msgs[2].value.containsKey('memo'), isFalse);
+        expect(
+          reviewProblems(
+            prepared.review,
+            msgs: msgs,
+            chainId: 'osmosis-1',
+            policy: data.fees,
+            book: data.book,
+            now: DateTime.now(),
+            venueChainId: 'osmosis-1',
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'contract from another chain: [MsgTransfer to the contract with the swap memo, fee on that chain]',
+      () async {
+        final c = world();
+        final view = await plan(
+          c,
+          from: 'cosmoshub-4:uatom',
+          to: 'osmosis-1:uosmo',
+          amount: '1',
+        );
+        expect(
+          view.ready,
+          isTrue,
+          reason: view.blockedReason ?? view.contract?.error ?? '',
+        );
+        expect(view.contract!.venueInputDenom, atomOnOsmosis);
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view);
+        final msgs = prepared.msgs;
+        expect(msgs.map((m) => m.typeUrl), [transferTypeUrl, bankSendTypeUrl]);
+        final transfer = msgs[0].value;
+        expect(transfer['source_channel'], 'channel-141');
+        expect(transfer['token'], {'denom': 'uatom', 'amount': '995000'});
+        // ibc-hooks runs only when the ICS20 receiver is the contract.
+        expect(transfer['receiver'], xcs);
+        final memo =
+            jsonDecode(transfer['memo'] as String) as Map<String, Object?>;
+        final swap =
+            ((memo['wasm']! as Map)['msg']! as Map)['osmosis_swap']! as Map;
+        expect(swap['output_denom'], 'uosmo');
+        expect(swap['receiver'], osmoMe);
+        expect(swap['on_failed_delivery'], {'local_recovery_addr': osmoMe});
+        expect(swap['slippage'], {
+          'twap': {'slippage_percentage': '1'},
+        });
+        expect(
+          msgs[1].value['to_address'],
+          data.fees.recipients['cosmoshub-4'],
+        );
+        expect(msgs[1].value['amount'], [
+          {'denom': 'uatom', 'amount': '5000'},
+        ]);
+        expect(prepared.memo, 'Swap ATOM · by Zunia-wallet');
+        // The quote was asked along the contract's own route (pool 1).
+        expect(view.quote!.route.single.poolId, '1');
+        expect(
+          reviewProblems(
+            prepared.review,
+            msgs: msgs,
+            chainId: 'cosmoshub-4',
+            policy: data.fees,
+            book: data.book,
+            now: DateTime.now(),
+            venueChainId: 'osmosis-1',
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'contract from Osmosis: [MsgExecuteContract osmosis_swap with the coin attached, fee]',
+      () async {
+        final c = world();
+        final view = await plan(
+          c,
+          from: 'osmosis-1:uosmo',
+          to: 'cosmoshub-4:uatom',
+          amount: '10',
+        );
+        expect(view.path, SwapPath.contract);
+        expect(
+          view.ready,
+          isTrue,
+          reason: view.blockedReason ?? view.contract?.error ?? '',
+        );
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view);
+        final msgs = prepared.msgs;
+        expect(msgs.map((m) => m.typeUrl), [
+          executeContractTypeUrl,
+          bankSendTypeUrl,
+        ]);
+        expect(msgs[0].value['contract'], xcs);
+        expect(msgs[0].value['funds'], [
+          {'denom': 'uosmo', 'amount': '9950000'},
+        ]);
+        final body =
+            jsonDecode(
+                  utf8.decode(base64.decode(msgs[0].value['msg'] as String)),
+                )
+                as Map;
+        final swap = body['osmosis_swap'] as Map;
+        expect(swap['output_denom'], atomOnOsmosis);
+        expect(swap['receiver'], hubMe);
+        expect(prepared.memo, 'Swap OSMO to ATOM · by Zunia-wallet');
+        final facts = readSwapMessage(msgs[0])!;
+        expect(facts.contractCall, isTrue);
+        expect(facts.sold.amount, '9950000');
+      },
+    );
+
+    test(
+      'no treasury on the signing chain: the swap alone, byte for byte what it was before the fee',
+      () async {
+        final noFee = SwapData(
+          config: data.config,
+          fees: SwapFeePolicy(bps: 50, recipients: const {}),
+          book: data.book,
+          catalog: data.catalog,
+        );
+        final c = world(swapData: noFee);
+        final view = await plan(
+          c,
+          from: 'cosmoshub-4:uatom',
+          to: 'osmosis-1:uosmo',
+          amount: '1',
+        );
+        expect(view.fee!.charged, isFalse);
+        final at = DateTime(2026, 10, 18, 12);
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view, now: at);
+        expect(prepared.msgs, hasLength(1));
+        final bare = buildContractSwapMsg(
+          plan: view.contract!.plan!,
+          receiver: view.contract!.receiver!,
+          sender: hubMe,
+          amount: '1000000',
+          timeoutMinutes: data.config.packetTimeoutMinutes,
+          now: at,
+        );
+        expect(
+          jsonEncode(prepared.msgs.single.toJson()),
+          jsonEncode(bare.toJson()),
+        );
+      },
+    );
+  });
+
+  group('the review stands only while nothing moves', () {
+    test(
+      'the Sign button reads Out of date once the form changes, and Price expired after the TTL',
+      () async {
+        final c = world();
+        final view = await plan(
+          c,
+          from: 'osmosis-1:uosmo',
+          to: 'osmosis-1:$usdcInj',
+          amount: '10',
+        );
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view);
+        final review = prepared.review;
+        final ttl = data.config.quoteTtl;
+        ({String label, String reason})? block(DateTime now) => swapSignBlock(
+          problem: null,
+          drift: reviewDrift(review, c.read(swapViewProvider).live),
+          price: review.price,
+          refreshing: false,
+          now: now,
+          ttl: ttl,
+          feeShort: false,
+        );
+        expect(block(DateTime.now()), isNull);
+        expect(block(review.price.at.add(ttl))?.label, 'Price expired');
+        // The user edits the amount under the review.
+        c.read(swapControllerProvider.notifier).setAmount('11', view.from!);
+        final moved = block(DateTime.now());
+        expect(moved?.label, 'Out of date');
+        expect(moved?.reason, contains('no longer 10 OSMO'));
+      },
+    );
+
+    test(
+      'a fee the review did not show, a changed amount or an extra message is refused',
+      () async {
+        final c = world();
+        final view = await plan(
+          c,
+          from: 'osmosis-1:uosmo',
+          to: 'osmosis-1:$usdcInj',
+          amount: '10',
+        );
+        final prepared = await c
+            .read(swapControllerProvider.notifier)
+            .prepareReview(view);
+        List<String> problems(List<TxMsg> msgs) => reviewProblems(
+          prepared.review,
+          msgs: msgs,
+          chainId: 'osmosis-1',
+          policy: data.fees,
+          book: data.book,
+          now: DateTime.now(),
+          venueChainId: 'osmosis-1',
+        );
+        final swap = prepared.msgs[0];
+        final elsewhere = buildSwapFeeMsg(
+          sender: osmoMe,
+          recipient: bech('osmo', 9),
+          denom: 'uosmo',
+          amount: BigInt.from(50000),
+        );
+        expect(
+          problems([swap, elsewhere]).single,
+          contains("not Zunia's fee address"),
+        );
+        final more = buildSwapFeeMsg(
+          sender: osmoMe,
+          recipient: data.fees.recipients['osmosis-1']!,
+          denom: 'uosmo',
+          amount: BigInt.from(50001),
+        );
+        expect(problems([swap, more]).single, contains('The Zunia fee is'));
+        expect(problems([swap]).single, contains('leaves out'));
+        expect(problems([...prepared.msgs, prepared.msgs[1]]), [extraMessages]);
+        final floorless = TxMsg(swap.typeUrl, {
+          ...swap.value,
+          'token_out_min_amount': '1',
+        });
+        expect(
+          problems([floorless, prepared.msgs[1]]).single,
+          contains("swap's minimum"),
+        );
+      },
+    );
+  });
+
+  test('the default memo names the swap, never the fee beside it', () {
+    final pool = buildPoolSwapMsg(
+      sender: osmoMe,
+      denom: 'uosmo',
+      routes: const [
+        PoolRoute([PoolHop('1', atomOnOsmosis)], '1000'),
+      ],
+      minOut: '400',
+    );
+    final fee = buildSwapFeeMsg(
+      sender: osmoMe,
+      recipient: bech('osmo', 5),
+      denom: 'uosmo',
+      amount: BigInt.from(5),
+    );
     expect(
-      state.warnings.any((w) => w.contains('entered by hand')),
-      isTrue,
+      swapTxMemo([pool, fee], 'osmosis-1', data.book),
+      'Swap OSMO to ATOM · by Zunia-wallet',
     );
+    // A token nothing proves is left out rather than named.
+    final unknown = buildPoolSwapMsg(
+      sender: osmoMe,
+      denom: 'uosmo',
+      routes: const [
+        PoolRoute([
+          PoolHop(
+            '1',
+            'ibc/0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF',
+          ),
+        ], '1000'),
+      ],
+      minOut: '400',
+    );
+    expect(
+      swapTxMemo([unknown], 'osmosis-1', data.book),
+      'Swap · by Zunia-wallet',
+    );
+    expect(ibcDenomHash('transfer/channel-0', 'uatom'), atomOnOsmosis);
   });
 }

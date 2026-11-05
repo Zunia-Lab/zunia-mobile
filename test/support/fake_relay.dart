@@ -126,6 +126,15 @@ class RelayRoom {
   bool paired = false;
   bool ended = false;
 
+  /// Frames held for an offline side, as the relay's `queueMaxFrames`.
+  int queueMaxFrames = 32;
+
+  /// The relay's `maxPayloadBytes`: a larger frame closes the socket (1009).
+  int maxPayloadBytes = 512 * 1024;
+
+  /// Close codes the wallet's sockets were closed with by the relay.
+  final List<int> walletCloses = [];
+
   final Map<String, WebSocket?> sockets = {'dapp': null, 'wallet': null};
   final Map<String, List<String>> queues = {'dapp': [], 'wallet': []};
 
@@ -189,6 +198,11 @@ class RelayRoom {
 
   void _onFrame(String role, WebSocket ws, String data) {
     if (!identical(sockets[role], ws) || ended) return;
+    if (data.length > maxPayloadBytes) {
+      if (role == 'wallet') walletCloses.add(1009);
+      unawaited(ws.close(1009, 'too big'));
+      return;
+    }
     if (role == 'wallet' && blackholeWallet) return;
     final frame = Map<String, dynamic>.from(jsonDecode(data) as Map);
     received[role]!.add(frame);
@@ -198,7 +212,7 @@ class RelayRoom {
       case 'hello':
         if (role == 'wallet') forward(role, data);
       case 'msg':
-        forward(role, data);
+        forward(role, data, sender: ws);
       case 'paired':
         if (role == 'wallet') {
           paired = true;
@@ -212,14 +226,28 @@ class RelayRoom {
     }
   }
 
-  void forward(String from, String data) {
+  void forward(String from, String data, {WebSocket? sender}) {
     final to = _other(from);
     final socket = sockets[to];
     if (_open(socket)) {
       _write(socket!, data);
+    } else if (queues[to]!.length >= queueMaxFrames) {
+      _send(sender, {
+        't': 'error',
+        'code': 'QUEUE_FULL',
+        'message': 'The other side is offline and its queue is full',
+      });
     } else {
       queues[to]!.add(data);
     }
+  }
+
+  /// Cuts the dApp's socket without ending the session.
+  Future<void> dropDapp() async {
+    final socket = sockets['dapp'];
+    sockets['dapp'] = null;
+    _send(sockets['wallet'], {'t': 'peer', 'online': false});
+    await socket?.close(1001, 'going away');
   }
 
   /// Delivers a frame the wallet already got, as a buggy or hostile relay might.
@@ -261,7 +289,7 @@ class TestDapp {
   final FakeRelay relay;
   final RelayRoom room;
   late final ConnectKeyPair keys;
-  late final WebSocket socket;
+  late WebSocket socket;
   ConnectCipher? cipher;
   String? verificationCode;
   final Completer<void> helloReceived = Completer<void>();
@@ -306,6 +334,15 @@ class TestDapp {
       );
       if (envelope != null) messages.add(envelope);
     }
+  }
+
+  /// Opens a new dApp socket for the same session, as a reloaded page does.
+  Future<void> reconnect() async {
+    socket = await WebSocket.connect(
+      '${relay.url}/v1/connect/ws?sid=${room.sessionId}&role=dapp',
+      protocols: [kConnectV2, 'zunia.token.${room.dappToken}'],
+    );
+    socket.listen((data) => _onData(data as String));
   }
 
   /// Seals and sends; returns the frame as it went on the wire.

@@ -82,7 +82,7 @@ void main() {
     await pump(tester);
     expect(_reviewEnabled(tester), isFalse);
     expect(
-      find.textContaining('Enter the address that should receive'),
+      find.textContaining('Enter a recipient address'),
       findsOneWidget,
     );
   });
@@ -97,13 +97,12 @@ void main() {
 
     expect(_reviewEnabled(tester), isFalse);
     expect(
-      find.textContaining('it must start with "addr_safro1"'),
+      find.textContaining('starting with "addr_safro1"'),
       findsOneWidget,
     );
-    expect(find.textContaining('cannot be recovered'), findsOneWidget);
     // The footer points at the field rather than repeating its message, so a
     // single mistake does not read as two.
-    expect(find.text('Fix the recipient address above.'), findsOneWidget);
+    expect(find.text('Check the recipient address.'), findsOneWidget);
   });
 
   testWidgets('this wallet\'s own address is rejected on a same-chain transfer',
@@ -114,7 +113,7 @@ void main() {
 
     expect(_reviewEnabled(tester), isFalse);
     expect(find.textContaining('own address'), findsOneWidget);
-    expect(find.text('Fix the recipient address above.'), findsOneWidget);
+    expect(find.text('Check the recipient address.'), findsOneWidget);
   });
 
   testWidgets('a good recipient opens review', (tester) async {
@@ -129,9 +128,9 @@ void main() {
       (tester) async {
     await pump(tester, crossChain: true);
 
-    expect(find.text('No ICS721 route configured'), findsOneWidget);
+    expect(find.text('No cross-chain route'), findsOneWidget);
     expect(
-      find.textContaining('cannot be reused for a collectible'),
+      find.textContaining('no ICS721 route configured'),
       findsOneWidget,
     );
     // The voucher warning is on the form as well as the review screen: it

@@ -61,8 +61,7 @@ class MissionsTab extends ConsumerWidget {
     final progress = missions.isEmpty ? 0.0 : complete / missions.length;
     final remaining = missions.length - complete;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(gradient: s.screenGradient),
+    return ZuniaBackdrop(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

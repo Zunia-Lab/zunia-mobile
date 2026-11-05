@@ -1,26 +1,33 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zunia_mobile/main.dart';
+import 'package:zunia_mobile/screens/splash_screen.dart';
+import 'package:zunia_mobile/screens/welcome_screen.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    // The vault lives in secure storage; an empty one is a fresh install.
+    FlutterSecureStorage.setMockInitialValues({});
   });
 
-  testWidgets('a fresh install lands on the welcome step', (tester) async {
+  testWidgets('a fresh install opens on the splash, then the welcome screen', (tester) async {
     await tester.pumpWidget(const ProviderScope(child: ZuniaApp()));
-    // Allow the appGate FutureProvider to resolve.
-    await tester.pumpAndSettle();
+    expect(find.byType(SplashScreen), findsWidgets);
 
-    // Assert the copy the screen actually renders. The previous version looked
-    // for the text 'zunia', which stopped existing the day the wordmark became
-    // artwork, and for a 'Create wallet' label that has always read
-    // 'Create a new wallet' — so it failed for reasons that said nothing about
-    // whether onboarding works.
-    expect(find.text('Your keys.\nEvery chain.'), findsOneWidget);
+    // The welcome screen idles with a looping animation, so it never
+    // "settles": step past the splash (intro + dissolve, under 900 ms).
+    for (var i = 0; i < 70; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+
+    expect(find.byType(SplashScreen), findsNothing);
+    expect(find.byType(WelcomeScreen), findsOneWidget);
     expect(find.text('Create a new wallet'), findsOneWidget);
+    expect(find.text('I already have a wallet'), findsOneWidget);
   });
 }

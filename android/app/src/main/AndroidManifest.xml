@@ -3,11 +3,18 @@
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+    <!-- Android 13+: device notifications for the notice feed. Asked for only
+         when the user turns notifications on, never at launch. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
         android:label="Zunia"
         android:name="${applicationName}"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@xml/network_security_config">
@@ -31,14 +38,21 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- Custom scheme: zunia://wc | zunia://connect | zunia://dapp -->
+            <!--
+              Custom schemes. zunia:// takes any host so WalletConnect's bare
+              "zunia://" redirect also opens the app; DeepLinkHandler ignores
+              what it does not know.
+                zunia://connect?v=2&sid&t&pk&r[&ret]   pair over Zunia Connect
+                zunia://connect/wake?sid=              show what a paired site sent
+                zunia://wc?uri=wc:...                  pair over WalletConnect
+                zunia://wc?requestId=&sessionTopic=    a WalletConnect request waits
+                zunia://dapp?url=https://...           open a site (after the user confirms)
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="zunia" android:host="wc"/>
-                <data android:scheme="zunia" android:host="connect"/>
-                <data android:scheme="zunia" android:host="dapp"/>
+                <data android:scheme="zunia"/>
             </intent-filter>
 
             <!-- Alias scheme used by some WC mobile wallets -->
@@ -58,26 +72,30 @@
             </intent-filter>
 
             <!--
-              Verified App Links (Digital Asset Links).
-              Host https://zunialab.com/.well-known/assetlinks.json with:
+              Verified App Links (Digital Asset Links). Both hosts must serve
+              /.well-known/assetlinks.json with:
               [{
                 "relation": ["delegate_permission/common.handle_all_urls"],
                 "target": {
                   "namespace": "android_app",
-                  "package_name": "com.zuniawallet.zunia_mobile",
+                  "package_name": "com.zunialab.wallet",
                   "sha256_cert_fingerprints": ["<PLAY_APP_SIGNING_CERT>"]
                 }
               }]
               Fill fingerprints in config/connect.yaml once Play App Signing is set.
+              Paths: /connect (pair), /connect/wake (show what a paired site
+              sent), /wc (WalletConnect).
             -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="zunialab.com" android:path="/connect"/>
+                <data android:scheme="https" android:host="zunialab.com" android:path="/connect/wake"/>
                 <data android:scheme="https" android:host="zunialab.com" android:pathPrefix="/wc"/>
-                <data android:scheme="https" android:host="zunialab.com" android:pathPrefix="/connect"/>
+                <data android:scheme="https" android:host="link.zunialab.com" android:path="/connect"/>
+                <data android:scheme="https" android:host="link.zunialab.com" android:path="/connect/wake"/>
                 <data android:scheme="https" android:host="link.zunialab.com" android:pathPrefix="/wc"/>
-                <data android:scheme="https" android:host="link.zunialab.com" android:pathPrefix="/connect"/>
             </intent-filter>
         </activity>
         <meta-data

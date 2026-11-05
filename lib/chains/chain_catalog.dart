@@ -26,6 +26,9 @@ class ChainEntry {
     this.registrySlug,
     this.inCosmosRegistry = false,
     this.logoSlugs,
+    this.currencies = const [],
+    this.ethPubKeyTypeUrl,
+    this.coinGeckoId,
   });
 
   factory ChainEntry.fromJson(Map<String, dynamic> json) {
@@ -68,6 +71,14 @@ class ChainEntry {
                 if (value is String) value,
             ]
           : null,
+      currencies: json['currencies'] is List
+          ? [
+              for (final value in json['currencies'] as List)
+                if (value is Map<String, dynamic>) ChainCurrency.fromJson(value),
+            ]
+          : const [],
+      ethPubKeyTypeUrl: json['ethPubKeyTypeUrl'] as String?,
+      coinGeckoId: json['coinGeckoId'] as String?,
     );
   }
 
@@ -104,16 +115,75 @@ class ChainEntry {
   /// Cosmostation / registry directory names for validator moniker images.
   final List<String>? logoSlugs;
 
+  /// Every currency the registry lists for the chain, native coin first.
+  final List<ChainCurrency> currencies;
+
+  /// Protobuf type URL of an `ethsecp256k1` key when it is not Ethermint's,
+  /// e.g. Injective's.
+  final String? ethPubKeyTypeUrl;
+
+  /// CoinGecko id of the native coin, when it has one.
+  final String? coinGeckoId;
+
+  /// Addresses are keccak-derived, Ethereum style (Evmos, Injective, ...).
+  bool get usesEthAddress => features?.contains('eth-address-gen') ?? false;
+
+  /// The chain verifies keccak256 sign bytes rather than SHA-256.
+  bool get usesEthKeySign => features?.contains('eth-key-sign') ?? false;
+
   bool get isTestnet => network == 'testnet';
 
   double get averageGasPrice => gasPriceStep?['average'] ?? 0.025;
 
-  /// Shape the FFI kernel expects for derivation.
-  String toChainJson() => jsonEncode({
-        'chainId': chainId,
-        'bech32Prefix': bech32Prefix,
-        'coinType': coinType,
-      });
+  /// The chain document the kernel derives and signs with.
+  ///
+  /// The kernel parses it as a Keplr `ChainInfo` and refuses anything missing
+  /// `chainName`, `rpc`, `rest`, `bip44`, `bech32Config` or `feeCurrencies`.
+  /// `features` decides the address scheme and the signing hash, so it is
+  /// passed through whole. Mirrors the extension's `chainJsonFor`
+  /// (zunia-extension/lib/chains.ts) field for field, which is what makes one
+  /// phrase give the same addresses in both.
+  String toChainJson() {
+    final fee = {
+      'coinDenom': feeDenom.isEmpty ? coinDenom : feeDenom,
+      'coinMinimalDenom': feeMinimalDenom.isEmpty ? coinMinimalDenom : feeMinimalDenom,
+      'coinDecimals': feeMinimalDenom.isEmpty ? coinDecimals : feeDecimals,
+      'gasPriceStep': gasPriceStep ?? const {'low': 0.01, 'average': 0.025, 'high': 0.04},
+    };
+    return jsonEncode({
+      'chainId': chainId,
+      'chainName': chainName,
+      'rpc': _kernelEndpoint(rpc),
+      'rest': _kernelEndpoint(rest),
+      'bip44': {'coinType': coinType},
+      'bech32Config': {'bech32PrefixAccAddr': bech32Prefix},
+      'currencies': [
+        {
+          'coinDenom': coinDenom,
+          'coinMinimalDenom': coinMinimalDenom,
+          'coinDecimals': coinDecimals,
+        },
+      ],
+      'feeCurrencies': [fee],
+      'features': features ?? const <String>[],
+      if (ethPubKeyTypeUrl != null) 'ethPubKeyTypeUrl': ethPubKeyTypeUrl,
+      'bech32Prefix': bech32Prefix,
+      'coinType': coinType,
+    });
+  }
+
+  /// `ChainInfo::validate` accepts https or loopback. The kernel never dials
+  /// these; the wallet's own LCD calls use [rest] directly.
+  static String _kernelEndpoint(String? url) {
+    if (url != null &&
+        (url.startsWith('https://') ||
+            url.startsWith('http://localhost') ||
+            url.startsWith('http://127.0.0.1') ||
+            url.startsWith('http://0.0.0.0'))) {
+      return url;
+    }
+    return 'https://rpc.invalid';
+  }
 
   Map<String, dynamic> toJson() => {
         'chainId': chainId,
@@ -135,6 +205,10 @@ class ChainEntry {
         if (registrySlug != null) 'registrySlug': registrySlug,
         'inCosmosRegistry': inCosmosRegistry,
         if (logoSlugs != null) 'logoSlugs': logoSlugs,
+        if (currencies.isNotEmpty)
+          'currencies': [for (final c in currencies) c.toJson()],
+        if (ethPubKeyTypeUrl != null) 'ethPubKeyTypeUrl': ethPubKeyTypeUrl,
+        if (coinGeckoId != null) 'coinGeckoId': coinGeckoId,
       };
 
   bool matches(String query) {
@@ -145,6 +219,35 @@ class ChainEntry {
         bech32Prefix.toLowerCase().contains(q) ||
         coinDenom.toLowerCase().contains(q);
   }
+}
+
+/// One currency of a chain, as the registry lists it.
+class ChainCurrency {
+  const ChainCurrency({
+    required this.coinDenom,
+    required this.coinMinimalDenom,
+    required this.coinDecimals,
+    this.coinGeckoId,
+  });
+
+  factory ChainCurrency.fromJson(Map<String, dynamic> json) => ChainCurrency(
+        coinDenom: json['coinDenom'] as String? ?? '',
+        coinMinimalDenom: json['coinMinimalDenom'] as String? ?? '',
+        coinDecimals: (json['coinDecimals'] as num?)?.toInt() ?? 6,
+        coinGeckoId: json['coinGeckoId'] as String?,
+      );
+
+  final String coinDenom;
+  final String coinMinimalDenom;
+  final int coinDecimals;
+  final String? coinGeckoId;
+
+  Map<String, dynamic> toJson() => {
+        'coinDenom': coinDenom,
+        'coinMinimalDenom': coinMinimalDenom,
+        'coinDecimals': coinDecimals,
+        if (coinGeckoId != null) 'coinGeckoId': coinGeckoId,
+      };
 }
 
 /// Chains pinned to the top of every picker, in this order.

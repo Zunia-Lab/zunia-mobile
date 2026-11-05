@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zunia_mobile/services/interchain/lcd.dart';
 import 'package:zunia_mobile/services/interchain/memo.dart';
 import 'package:zunia_mobile/services/interchain/swap.dart';
+import 'package:zunia_mobile/services/interchain/tracking.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 
 class _FakeLcd implements LcdClient {
@@ -367,5 +368,86 @@ void main() {
       ),
       contains('"twap":{"slippage_percentage":"20","window_seconds":10}'),
     );
+  });
+
+  // A crosschain swap signed on Osmosis itself (the funds were already there)
+  // opens its route with the swap: the contract runs in the source
+  // transaction and sends the output on from it. Tracking must count that
+  // swap as done and follow the delivery, not leave it pending forever.
+  test('a swap that opens the route is done once its transaction sent the delivery', () async {
+    Map<String, Object?> attr(String key, String value) => {'key': key, 'value': value};
+    const plan = RoutePlan(
+      sourceChainId: 'osmosis-1',
+      destChainId: 'cosmoshub-4',
+      inputDenom: 'uosmo',
+      outputDenom: 'uatom',
+      hops: [
+        RouteHop(chainId: 'osmosis-1', channelId: '', port: '', counterpartyChainId: 'osmosis-1', kind: RouteHopKind.swap),
+        RouteHop(chainId: 'osmosis-1', channelId: 'channel-0', port: 'transfer', counterpartyChainId: 'cosmoshub-4', kind: RouteHopKind.forward),
+      ],
+      memo: '',
+      warnings: [],
+      estimatedDurationSeconds: 60,
+      requiresPfm: false,
+      requiresIbcHooks: false,
+    );
+    final osmosis = _FakeLcd('osmosis-1', {
+      '/cosmos/tx/v1beta1/txs/SW1': (_) => {
+            'tx_response': {
+              'txhash': 'SW1',
+              'height': '100',
+              'timestamp': '2026-10-18T00:00:00Z',
+              'events': [
+                {
+                  'type': 'send_packet',
+                  'attributes': [
+                    attr('packet_sequence', '9'),
+                    attr('packet_src_port', 'transfer'),
+                    attr('packet_src_channel', 'channel-0'),
+                    attr('packet_dst_port', 'transfer'),
+                    attr('packet_dst_channel', 'channel-141'),
+                    attr('packet_timeout_timestamp', '1'),
+                  ],
+                },
+              ],
+            },
+          },
+      '/cosmos/tx/v1beta1/txs': (query) {
+        final q = query!['query']! as String;
+        if (!q.contains('acknowledge_packet')) return {'tx_responses': []};
+        return {
+          'tx_responses': [
+            {
+              'txhash': 'ACK9',
+              'timestamp': '2026-10-18T00:01:00Z',
+              'events': [
+                {
+                  'type': 'acknowledge_packet',
+                  'attributes': [
+                    attr('packet_sequence', '9'),
+                    attr('packet_src_channel', 'channel-0'),
+                    attr('packet_dst_channel', 'channel-141'),
+                  ],
+                },
+              ],
+            },
+          ],
+        };
+      },
+    });
+    final hub = _FakeLcd('cosmoshub-4', {
+      '/cosmos/tx/v1beta1/txs': (_) => {'tx_responses': []},
+    });
+    final trace = await trackRoute(
+      plan,
+      'SW1',
+      (chainId) => chainId == 'osmosis-1' ? osmosis : hub,
+      swapContract: 'osmo1xcs',
+      recoveryAddress: 'osmo1recovery',
+    );
+    expect(trace.hops.first.status, PacketStatus.acknowledged);
+    expect(trace.hops.last.status, PacketStatus.acknowledged);
+    expect(trace.status, PacketStatus.acknowledged);
+    expect(trace.failure, isNull);
   });
 }

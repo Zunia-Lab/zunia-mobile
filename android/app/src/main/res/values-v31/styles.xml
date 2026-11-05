@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ draws its own splash screen from these attributes: no icon
+         background, so the icon is a 288dp canvas of which the middle 192dp
+         circle shows; drawable-v31/splash_icon.xml puts the mark at 1:1 in its
+         centre. MainActivity removes the splash without the default exit
+         animation, since Flutter's first frame is already identical. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowSplashScreenBackground">@color/zunia_splash_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@color/zunia_splash_bg</item>
+        <item name="android:windowLightStatusBar">@bool/zunia_light_system_bars</item>
+        <item name="android:navigationBarColor">@color/zunia_splash_bg</item>
+        <item name="android:windowLightNavigationBar">@bool/zunia_light_system_bars</item>
+    </style>
+</resources>

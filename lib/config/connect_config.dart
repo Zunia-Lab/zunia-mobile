@@ -22,7 +22,7 @@ const String kWalletUrl = 'https://zunialab.com';
 const String kWalletIconUrl =
     'https://raw.githubusercontent.com/Zunia-Lab/zunia-brand/main/png/icons/app/zunia-icon-512.png';
 
-const String kAndroidApplicationId = 'com.zuniawallet.zunia_mobile';
+const String kAndroidApplicationId = 'com.zunialab.wallet';
 const String kIosBundleId = 'com.zuniawallet.zuniaMobile';
 
 /// Custom URL schemes registered in AndroidManifest / Info.plist.
@@ -34,7 +34,8 @@ const List<String> kUniversalLinkHosts = [
   'link.zunialab.com',
 ];
 
-const List<String> kUniversalLinkPaths = ['/wc', '/connect'];
+/// The app claims exactly these (see `connect_links.dart` for what each does).
+const List<String> kUniversalLinkPaths = ['/wc', '/connect', '/connect/wake'];
 
 /// Cosmos WalletConnect methods the wallet intends to support.
 const List<String> kCosmosWcMethods = [

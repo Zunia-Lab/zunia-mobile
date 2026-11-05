@@ -1,24 +1,20 @@
-/// Mnemonic, sealing and address derivation for the app.
+/// Mnemonics, sealing, derivation and signing for the app: all of it in the
+/// Rust kernel (`zunia_core`), the same code the extension runs as WebAssembly.
 ///
-/// The Rust kernel behind `zunia_core` is the reference implementation and is
-/// used whenever its native library ships with the build. When it is absent,
-/// this falls back to the same BIP-39 / BIP-32 / secp256k1 / bech32 primitives
-/// in pure Dart, so addresses are always real rather than placeholders. Both
-/// paths agree with the golden vectors in `zunia-core/tests/vectors`.
+/// There is no Dart fallback. A second implementation is a second set of
+/// addresses and a second set of bugs: the one this app used to carry derived
+/// Ethermint addresses wrong and sealed the phrase with a repeating-key XOR. A
+/// build without its native library cannot sign, and says so (see
+/// [WalletKernel.isAvailable] and `KernelMissingScreen`).
 library;
 
 import 'dart:convert';
-import 'dart:typed_data';
 
-import 'package:bech32/bech32.dart';
-import 'package:bip32/bip32.dart' as bip32;
 import 'package:bip39/bip39.dart' as bip39;
-import 'package:crypto/crypto.dart';
-import 'package:pointycastle/digests/ripemd160.dart';
+import 'package:flutter/foundation.dart';
 import 'package:zunia_core/zunia_core.dart';
 
 import 'package:zunia_mobile/chains/chain_catalog.dart';
-import 'package:zunia_mobile/crypto/keystore.dart';
 
 class DerivedAccount {
   const DerivedAccount({
@@ -26,69 +22,108 @@ class DerivedAccount {
     required this.address,
     required this.path,
     required this.publicKey,
+    this.ethAddress,
   });
 
   final String chainId;
   final String address;
+
+  /// `m/44'/<coin type>'/0'/0/<index>`, as the extension derives it.
   final String path;
+
+  /// 33-byte compressed secp256k1 key.
   final Uint8List publicKey;
+
+  /// `0x...` on chains that derive Ethereum-style addresses.
+  final String? ethAddress;
+
+  String get publicKeyHex => _hex(publicKey);
+}
+
+/// The native kernel did not load: the build is missing `libzunia_ffi`.
+class KernelUnavailableException implements Exception {
+  const KernelUnavailableException(this.reason);
+  final String reason;
+
+  @override
+  String toString() => 'Signing core unavailable: $reason';
 }
 
 class WalletKernel {
-  WalletKernel._(this._core);
+  WalletKernel._(this._core, this._loadError);
 
   static WalletKernel? _instance;
 
-  /// Null when the native library is not bundled for this platform.
   final ZuniaCore? _core;
+  final String? _loadError;
 
-  static WalletKernel get instance => _instance ??= WalletKernel._(_tryOpen());
+  static WalletKernel get instance => _instance ??= _open();
 
-  static ZuniaCore? _tryOpen() {
+  static WalletKernel _open() {
     try {
-      return ZuniaCore.open();
-    } catch (_) {
-      return null;
+      return WalletKernel._(ZuniaCore.open(), null);
+    } catch (e) {
+      return WalletKernel._(null, '$e');
     }
   }
 
-  /// True when the audited Rust kernel is doing the work.
-  bool get usingNativeCore => _core != null;
-
-  String generateMnemonic({int words = 12}) {
-    final core = _core;
-    if (core != null) return core.generateMnemonic(words: words);
-    return bip39.generateMnemonic(strength: words == 24 ? 256 : 128);
+  /// Uses [core] instead of the bundled library: tests on the host load a
+  /// kernel built for the development machine.
+  @visibleForTesting
+  static void debugUse(ZuniaCore? core) {
+    _instance = core == null ? null : WalletKernel._(core, null);
   }
 
-  bool validateMnemonic(String phrase) =>
-      bip39.validateMnemonic(phrase.trim().replaceAll(RegExp(r'\s+'), ' '));
+  /// True when the native kernel loaded. Nothing can be signed otherwise.
+  bool get isAvailable => _core != null;
 
+  /// Kept for the About row: the kernel is the only path there is.
+  bool get usingNativeCore => isAvailable;
+
+  /// Why the kernel did not load, for the screen that says so.
+  String? get loadError => _loadError;
+
+  String get kernelVersion => _require().kernelVersion;
+
+  ZuniaCore get core => _require();
+
+  ZuniaCore _require() {
+    final core = _core;
+    if (core == null) {
+      throw KernelUnavailableException(_loadError ?? 'not loaded');
+    }
+    return core;
+  }
+
+  String generateMnemonic({int words = 12}) =>
+      _require().generateMnemonic(words: words);
+
+  /// Checksum and word list only; does not touch key material.
+  bool validateMnemonic(String phrase) =>
+      bip39.validateMnemonic(normalizePhrase(phrase));
+
+  static String normalizePhrase(String phrase) =>
+      phrase.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
+  /// Argon2id + AEAD envelope (zunia-core `KeyringEnvelope`), as JSON.
   String sealKeyring({
     required String phrase,
     required String password,
     Map<String, Object?> metadata = const {},
   }) {
-    final core = _core;
-    if (core != null) {
-      return core.sealKeyring(
-        phrase: phrase,
-        password: password,
-        metadata: metadata,
-      );
-    }
-    return Keystore.localSealFallback(phrase: phrase, password: password);
+    return _require().sealKeyring(
+      phrase: phrase,
+      password: password,
+      metadata: metadata,
+    );
   }
 
+  /// The phrase inside [envelopeJson]; throws on a wrong password.
   String openKeyring({
     required String envelopeJson,
     required String password,
   }) {
-    final core = _core;
-    if (core != null) {
-      return core.openKeyring(envelopeJson: envelopeJson, password: password);
-    }
-    return Keystore.localOpenFallback(
+    return _require().openKeyring(
       envelopeJson: envelopeJson,
       password: password,
     );
@@ -100,84 +135,70 @@ class WalletKernel {
     int accountIndex = 0,
     String passphrase = '',
   }) {
-    final core = _core;
-    if (core != null) {
-      final row = core.deriveAddress(
-        phrase: phrase,
-        passphrase: passphrase,
-        chainJson: chain.toChainJson(),
-        accountIndex: accountIndex,
-      );
-      return DerivedAccount(
-        chainId: chain.chainId,
-        address: (row['bech32Address'] ?? row['address']) as String,
-        path: row['path'] as String? ?? _path(chain.coinType, accountIndex),
-        publicKey: _decodePubKey(row['pubKey']),
-      );
-    }
-    return _deriveLocally(
+    final row = _require().deriveAddress(
       phrase: phrase,
-      chain: chain,
-      accountIndex: accountIndex,
       passphrase: passphrase,
-    );
-  }
-
-  DerivedAccount _deriveLocally({
-    required String phrase,
-    required ChainEntry chain,
-    required int accountIndex,
-    required String passphrase,
-  }) {
-    final seed = bip39.mnemonicToSeed(phrase.trim(), passphrase: passphrase);
-    final path = _path(chain.coinType, accountIndex);
-    final node = bip32.BIP32.fromSeed(seed).derivePath(path);
-    final pubKey = Uint8List.fromList(node.publicKey);
-    final digest = RIPEMD160Digest().process(
-      Uint8List.fromList(sha256.convert(pubKey).bytes),
-    );
-    final address = bech32.encode(
-      Bech32(chain.bech32Prefix, _toWords(digest)),
+      chainJson: chain.toChainJson(),
+      accountIndex: accountIndex,
     );
     return DerivedAccount(
       chainId: chain.chainId,
-      address: address,
-      path: path,
-      publicKey: pubKey,
+      address: row['address'] as String,
+      path: row['path'] as String,
+      publicKey: _unhex(row['publicKeyHex'] as String),
+      ethAddress: row['ethAddress'] as String?,
     );
   }
 
-  static String _path(int coinType, int accountIndex) =>
-      "m/44'/$coinType'/$accountIndex'/0/0";
-
-  static Uint8List _decodePubKey(Object? raw) {
-    if (raw is String) {
-      try {
-        return base64Decode(raw);
-      } catch (_) {
-        return Uint8List(0);
-      }
-    }
-    if (raw is List) {
-      return Uint8List.fromList(raw.cast<int>());
-    }
-    return Uint8List(0);
+  /// Signs bytes a site handed over (a Direct `SignDoc`, Amino sign bytes or
+  /// an ADR-036 document) and returns the 64-byte `r||s` signature.
+  ///
+  /// The kernel picks SHA-256 or keccak256 from the chain's features, so a
+  /// caller cannot sign an Injective document with the Cosmos hash.
+  Uint8List signBytes({
+    required String phrase,
+    required ChainEntry chain,
+    required Uint8List bytes,
+    int accountIndex = 0,
+  }) {
+    final hex = _require().signCosmos(
+      phrase: phrase,
+      chainJson: chain.toChainJson(),
+      accountIndex: accountIndex,
+      signBytesHex: _hex(bytes),
+    );
+    return _unhex(hex);
   }
 
-  /// 8-bit groups to the 5-bit groups bech32 expects.
-  static List<int> _toWords(Uint8List bytes) {
-    var acc = 0;
-    var bits = 0;
-    final out = <int>[];
-    for (final byte in bytes) {
-      acc = (acc << 8) | byte;
-      bits += 8;
-      while (bits >= 5) {
-        bits -= 5;
-        out.add((acc >> bits) & 31);
-      }
-    }
-    if (bits > 0) out.add((acc << (5 - bits)) & 31);
-    return out;
-  }
+  /// What a Direct `SignDoc` says, in the kernel's words (payload v2). Throws
+  /// when the document cannot be trusted at all.
+  Map<String, dynamic> decodeDirect(Uint8List signDoc) =>
+      _require().decodeDirectTx(signDocHex: _hex(signDoc));
 }
+
+String _hex(List<int> bytes) {
+  final out = StringBuffer();
+  for (final b in bytes) {
+    out.write(b.toRadixString(16).padLeft(2, '0'));
+  }
+  return out.toString();
+}
+
+Uint8List _unhex(String hex) {
+  final clean = hex.startsWith('0x') ? hex.substring(2) : hex;
+  if (clean.length.isOdd) throw const FormatException('odd-length hex');
+  final out = Uint8List(clean.length ~/ 2);
+  for (var i = 0; i < out.length; i++) {
+    out[i] = int.parse(clean.substring(i * 2, i * 2 + 2), radix: 16);
+  }
+  return out;
+}
+
+/// Lowercase hex, as the kernel reads and writes it.
+String hexOf(List<int> bytes) => _hex(bytes);
+
+/// Bytes of a hex string, with or without `0x`.
+Uint8List bytesOfHex(String hex) => _unhex(hex);
+
+/// Base64 of a byte string; a helper for the wire formats around signing.
+String b64(List<int> bytes) => base64Encode(bytes);

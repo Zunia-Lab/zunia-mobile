@@ -22,10 +22,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST_ROOT="${DEST_ROOT:-$ROOT}"
 REPO="${ZUNIA_CORE_REPO:-Zunia-Lab/zunia-core}"
+# The pinned tag lives in config/core_native.env (bump-core.yml updates it);
+# ZUNIA_CORE_TAG in the environment overrides it.
+if [[ -z "${ZUNIA_CORE_TAG:-}" && -f "$ROOT/config/core_native.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/config/core_native.env"
+fi
 TAG="${ZUNIA_CORE_TAG:-}"
 
 if [[ -z "$TAG" ]]; then
-  echo "ZUNIA_CORE_TAG is required (e.g. v0.1.0)" >&2
+  echo "ZUNIA_CORE_TAG is required (e.g. v0.1.1), or pin it in config/core_native.env" >&2
   exit 1
 fi
 
@@ -70,6 +76,8 @@ FW_DEST="$DEST_ROOT/ios/Frameworks"
 if [[ -f "$WORKDIR/android-libs.tar.gz" ]]; then
   rm -rf "$JNI_DEST"
   mkdir -p "$JNI_DEST"
+  # Keep the tracked placeholder so the directory stays in git.
+  touch "$JNI_DEST/.gitkeep"
   tar -xzf "$WORKDIR/android-libs.tar.gz" -C "$WORKDIR"
   # Archive layout from build-native.sh: android/{arm64-v8a,armeabi-v7a,x86_64}/libzunia_ffi.so
   if [[ -d "$WORKDIR/android" ]]; then

@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Launch window before Android 12 (and whenever the system skips its splash):
+     the mark at its own size (96 x 120dp, drawable-*dpi/splash_mark.png from
+     scripts/brand-assets.py) in the centre of the launch background. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/zunia_splash_bg" />
     <item>

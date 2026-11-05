@@ -1,12 +1,9 @@
 /// Cross-chain swap and IBC routing configuration.
 ///
-/// Values mirror [config/interchain.yaml] and are supplied at build time with
-/// `--dart-define`. The one that matters is [kOsmosisXcsContract]: the Osmosis
-/// crosschain-swaps address is deployment data, not a protocol constant, and a
-/// wrong address in a memo sends funds to a contract that will not send them
-/// back. It therefore ships **unset**, the swap flow fails closed with a
-/// visible reason until it is configured, and the address is additionally
-/// checked on chain before any memo is built.
+/// Swap reads its deployment data (contract candidates, router hosts,
+/// slippage, quote lifetime) from `assets/data/interchain.json`, the file the
+/// extension release ships (`lib/swap/swap_config.dart`). What is left here
+/// are build-time overrides and the values older IBC screens still read.
 library;
 
 /// Chain the crosschain-swaps contract runs on.
@@ -15,12 +12,13 @@ const String kSwapVenueChainId = String.fromEnvironment(
   defaultValue: 'osmosis-1',
 );
 
-/// The Osmosis crosschain-swaps contract.
+/// An extra Osmosis crosschain-swaps candidate for this build, checked first.
 ///
-/// Empty by default and deliberately so. INTERCHAIN-SPEC.md lists two candidate
-/// addresses seen in governance and docs, both unverified; hardcoding either
-/// would make this wallet route funds through whatever that address later
-/// becomes. Set it with:
+/// The release's candidates live in `assets/data/interchain.json`
+/// (`xcsContractCandidates`, copied from the extension) and every one, this
+/// included, is confirmed on chain before the contract path is enabled: a
+/// wrong address in a memo sends funds to a contract that will not send them
+/// back. Empty by default; set it only to try another deployment:
 ///
 /// ```
 /// flutter run --dart-define=OSMOSIS_XCS_CONTRACT=osmo1…

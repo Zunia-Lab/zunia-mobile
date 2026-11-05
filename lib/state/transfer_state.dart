@@ -1,293 +1,203 @@
-/// Planning one cross-chain transfer (no swap).
+/// Cross-chain sends: the planner, and the transfers still in flight.
 ///
-/// The same engine the swap screen uses, with swapping turned off: discover the
-/// channels, work out whether the token should unwind rather than wrap again,
-/// and compose the one transfer the user signs — plus a packet-forward memo when
-/// no direct channel exists. The screen that used to hand-roll all of this now
-/// only renders what comes back.
+/// The planner (`lib/transfers/route_plan.dart`) is one per session, so a
+/// channel checked on both chains is not asked about again for ten minutes
+/// and a channel the chains refused stays out of the graph. The in-flight
+/// list survives restarts (`lib/transfers/pending_transfers.dart`) and is
+/// followed while the app is open: each record is polled until it lands,
+/// comes back, or needs the user, and then dropped (a recoverable swap stays,
+/// because it is the way back to the recover action).
 library;
+
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
-import 'package:zunia_mobile/config/interchain_config.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
-import 'package:zunia_mobile/services/interchain/channels.dart';
-import 'package:zunia_mobile/services/interchain/denom.dart';
-import 'package:zunia_mobile/services/interchain/memo.dart';
-import 'package:zunia_mobile/services/interchain/registry.dart';
-import 'package:zunia_mobile/services/interchain/route.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/state/interchain.dart';
+import 'package:zunia_mobile/state/wallet_state.dart';
+import 'package:zunia_mobile/transfers/pending_transfers.dart';
+import 'package:zunia_mobile/transfers/route_plan.dart';
 
-/// What the cross-send screen renders.
+/// One planner per session; the route cache is read, not watched, so a
+/// discovery that writes to it does not throw away this session's checks.
+final transferPlannerProvider = Provider<TransferPlanner>((ref) {
+  final store = ref.read(routeRegistryProvider);
+  final capabilities = ref.watch(chainCapabilityCacheProvider);
+  return TransferPlanner(TransferPlannerDeps(
+    registry: ref.watch(interchainRegistryProvider),
+    channels: ref.watch(channelServiceProvider),
+    routes: () => store.registry.list(),
+    rememberRoutes: store.remember,
+    lcdFor: (chainId) => ref.read(lcdResolverProvider)(chainId),
+    resolveDenom: (chain, denom) => ref.read(denomResolverProvider).resolve(chain.chainId, denom),
+    probeCapabilities: capabilities.probe,
+    capabilities: capabilities.lookup,
+  ));
+});
+
+/// The wallet's own address on each chain, for the receiver on an
+/// intermediate hop. Derived with the unlocked phrase; a chain whose address
+/// cannot be derived is left out, and the planner then blocks the route
+/// rather than addressing a packet to "pfm".
+Future<Map<String, String>> Function(List<String>) intermediateAddresses(Ref ref) =>
+    (chainIds) async {
+      final phrase = ref.read(phraseProvider);
+      final index = ref.read(walletProvider).active?.index ?? 0;
+      if (phrase == null || !ChainCatalog.isLoaded) return const {};
+      final out = <String, String>{};
+      for (final chainId in chainIds) {
+        final chain = ChainCatalog.instance.find(chainId);
+        if (chain == null) continue;
+        try {
+          out[chainId] = WalletKernel.instance
+              .deriveAddress(phrase: phrase, chain: chain, accountIndex: index)
+              .address;
+        } on Object {
+          // Left out on purpose; see above.
+        }
+      }
+      return out;
+    };
+
+final intermediateAddressesProvider =
+    Provider<Future<Map<String, String>> Function(List<String>)>(intermediateAddresses);
+
+/* -------------------------------------------------------------------------- *
+ * In flight
+ * -------------------------------------------------------------------------- */
+
 @immutable
-class TransferPlanState {
-  const TransferPlanState({
-    this.planning = false,
-    this.candidate,
-    this.options = const [],
-    this.warnings = const [],
-    this.blockedReason,
-    this.planError,
-    this.denomAdvice,
-    this.memoInspection,
-  });
+class PendingTransfersState {
+  const PendingTransfersState({this.records = const [], this.tracked = const {}, this.loaded = false});
 
-  final bool planning;
-  final RoutePlanCandidate? candidate;
+  /// Newest first.
+  final List<PendingTransfer> records;
 
-  /// Channels discovered for the first hop. Empty is a normal state on a chain
-  /// with a slow or partial LCD, and is exactly when the manual field matters.
-  final List<IbcChannelOption> options;
-
-  final List<String> warnings;
-
-  /// Why there is nothing to review yet. Always specific.
-  final String? blockedReason;
-
-  final String? planError;
-  final DenomRecommendation? denomAdvice;
-
-  /// What the memo will do. Empty-memo transfers report `MemoKind.empty`.
-  final MemoInspection? memoInspection;
-
-  bool get ready => candidate != null && blockedReason == null && planError == null;
+  /// Last poll per transaction hash.
+  final Map<String, TrackedTransfer> tracked;
+  final bool loaded;
 }
 
-/// Plans a cross-chain transfer. One instance per recipient screen.
-class TransferPlanController extends StateNotifier<TransferPlanState> {
-  TransferPlanController(this._ref) : super(const TransferPlanState());
+/// How often an in-flight transfer is asked about.
+const Duration transferPollInterval = Duration(seconds: 15);
 
-  final Ref _ref;
-  /// Channels the user typed, keyed by hop index.
-  ///
-  /// The chain pair rides along because an override has two jobs: replacing the
-  /// channel the search picked, and being the edge when discovery found nothing
-  /// at all. Only the second job needs the pair, and it is the job that matters
-  /// on a chain whose endpoint cannot list its channels.
-  final Map<int, RouteHopOverride> _overrides = {};
-  int _generation = 0;
+/// Polls one record; tests replace it.
+typedef TransferPoller = Future<TrackedTransfer> Function(PendingTransfer record);
 
-  String? overrideFor(int hopIndex) => _overrides[hopIndex]?.channelId;
+final transferPollerProvider = Provider<TransferPoller>((ref) {
+  return (record) => pollTransfer(record, ref.read(lcdResolverProvider));
+});
 
-  void setOverride(
-    int hopIndex,
-    String channelId, {
-    String? fromChainId,
-    String? toChainId,
-  }) {
-    final normalized = normalizeChannelId(channelId);
-    if (normalized.isEmpty) {
-      _overrides.remove(hopIndex);
-      return;
-    }
-    _overrides[hopIndex] = RouteHopOverride(
-      hopIndex: hopIndex,
-      channelId: normalized,
-      fromChainId: fromChainId,
-      toChainId: toChainId,
-    );
+class PendingTransfersController extends StateNotifier<PendingTransfersState> {
+  PendingTransfersController(this._poll, {PendingTransferStore store = const PendingTransferStore()})
+      : _store = store,
+        super(const PendingTransfersState()) {
+    unawaited(_load());
   }
 
-  Future<void> plan({
-    required String sourceChainId,
-    required String destChainId,
-    required String inputDenom,
-    required String amountBaseUnits,
-    required String sender,
-    required String recipient,
-    String? phrase,
-    int accountIndex = 0,
-  }) async {
-    final generation = ++_generation;
-    void publish(TransferPlanState next) {
-      if (_generation == generation && mounted) state = next;
-    }
+  final TransferPoller _poll;
+  final PendingTransferStore _store;
+  final StreamController<TrackedTransfer> _settled = StreamController.broadcast();
+  Timer? _timer;
+  bool _polling = false;
 
-    if (recipient.isEmpty) {
-      publish(const TransferPlanState(
-        blockedReason: 'Enter a recipient address.',
-      ));
+  /// One event per transfer that reached an outcome, for a toast.
+  Stream<TrackedTransfer> get settled => _settled.stream;
+
+  Future<void> _load() async {
+    final records = await _store.list();
+    if (!mounted) return;
+    state = PendingTransfersState(records: records, tracked: state.tracked, loaded: true);
+    _schedule();
+  }
+
+  /// Remember a transfer that was just broadcast, before any screen changes,
+  /// so an app that closes on the next frame keeps the only view of the funds.
+  Future<void> add(PendingTransfer record) async {
+    final records = await _store.save(record);
+    if (!mounted) return;
+    state = PendingTransfersState(records: records, tracked: state.tracked, loaded: true);
+    _schedule();
+    unawaited(pollNow());
+  }
+
+  /// Stop following a transfer (the user dismissed it).
+  Future<void> forget(String txHash) async {
+    final records = await _store.remove(txHash);
+    if (!mounted) return;
+    state = PendingTransfersState(
+      records: records,
+      tracked: {...state.tracked}..remove(txHash),
+      loaded: true,
+    );
+    _schedule();
+  }
+
+  void _schedule() {
+    final active = state.records.any((record) => !(state.tracked[record.txHash]?.finished ?? false));
+    if (!active) {
+      _timer?.cancel();
+      _timer = null;
       return;
     }
-    if (BigInt.tryParse(amountBaseUnits) == null ||
-        BigInt.parse(amountBaseUnits) == BigInt.zero) {
-      publish(const TransferPlanState(
-        blockedReason: 'Enter an amount greater than zero.',
-      ));
-      return;
-    }
+    _timer ??= Timer.periodic(transferPollInterval, (_) => unawaited(pollNow()));
+  }
 
-    publish(const TransferPlanState(planning: true));
-
-    final registry = _ref.read(interchainRegistryProvider);
-    final channels = _ref.read(channelServiceProvider);
-    final routes = _ref.read(routeRegistryProvider);
-    final capabilities = _ref.read(chainCapabilityCacheProvider);
-
-    List<IbcChannelOption> options = const [];
+  /// Ask every unfinished record once.
+  Future<void> pollNow() async {
+    if (_polling || !mounted) return;
+    _polling = true;
     try {
-      options = await channels.findIbcChannels(sourceChainId, destChainId);
-      await routes.remember([
-        for (final option in options)
-          ChannelRoute(
-            sourceChainId: sourceChainId,
-            destChainId: destChainId,
-            channelId: option.channelId,
-            counterpartyChannelId: option.counterpartyChannelId,
-            verifiedAt: DateTime.now().millisecondsSinceEpoch,
-            source: ChannelRouteSource.discovered,
-          ),
-      ]);
-    } on InterchainError {
-      // Discovery failing is not fatal: a seed row or a hand-typed channel is
-      // enough to plan, and the plan says the channel is unverified.
-    }
-
-    await capabilities.probe(sourceChainId);
-
-    DenomRecommendation? advice;
-    try {
-      advice = await recommendDenom(
-        _ref.read(denomContextProvider),
-        sourceChainId,
-        destChainId,
-        inputDenom,
-        destinationReceiveChannelId:
-            options.isEmpty ? null : options.first.counterpartyChannelId,
-      );
-    } on InterchainError {
-      advice = null;
-    }
-
-    final deps = RoutePlannerDeps(
-      registry: registry,
-      channels: createChannelDirectory(routes.links()),
-      capabilities: capabilities.lookup,
-      resolveDenom: (chain, denom) =>
-          _ref.read(denomResolverProvider).resolve(chain.chainId, denom),
-    );
-    final request = RouteRequest(
-      sourceChainId: sourceChainId,
-      destChainId: destChainId,
-      inputDenom: inputDenom,
-      amount: amountBaseUnits,
-      sender: sender,
-      recipient: recipient,
-      timeoutMinutes: kPacketTimeoutMinutes,
-    );
-
-    RoutePlanResult result;
-    try {
-      result = await planRoute(
-        request,
-        deps,
-        PlanRouteOptions(overrides: _overrideList()),
-      );
-      final intermediates = _intermediateReceivers(
-        result,
-        sourceChainId: sourceChainId,
-        destChainId: destChainId,
-        phrase: phrase,
-        accountIndex: accountIndex,
-      );
-      if (intermediates.isNotEmpty) {
-        result = await planRoute(
-          request,
-          deps,
-          PlanRouteOptions(
-            overrides: _overrideList(),
-            intermediateReceivers: intermediates,
-          ),
+      for (final record in [...state.records]) {
+        final previous = state.tracked[record.txHash];
+        if (previous?.finished ?? false) continue;
+        final result = await _poll(record);
+        if (!mounted) return;
+        state = PendingTransfersState(
+          records: state.records,
+          tracked: {...state.tracked, record.txHash: result},
+          loaded: true,
         );
+        if (result.outcome != null && previous?.outcome != result.outcome) {
+          _settled.add(result);
+          // A recoverable swap stays listed: it is the way to the recover action.
+          if (result.outcome != RouteOutcome.recoverable) {
+            final records = await _store.remove(record.txHash);
+            if (!mounted) return;
+            // Kept on screen for this visit, so the row turns to its outcome
+            // instead of vanishing.
+            state = PendingTransfersState(
+              records: [
+                ...records,
+                if (!records.any((row) => row.txHash == record.txHash)) record,
+              ]..sort((a, b) => b.startedAt.compareTo(a.startedAt)),
+              tracked: state.tracked,
+              loaded: true,
+            );
+          }
+        }
       }
-    } on InterchainError catch (error) {
-      publish(TransferPlanState(
-        options: options,
-        denomAdvice: advice,
-        planError: error.message,
-      ));
-      return;
+    } finally {
+      _polling = false;
+      if (mounted) _schedule();
     }
-
-    final candidate = result.best;
-    if (candidate == null) {
-      publish(TransferPlanState(
-        options: options,
-        denomAdvice: advice,
-        warnings: result.warnings,
-        blockedReason: result.warnings.isEmpty
-            ? 'No channel path between these chains could be found.'
-            : result.warnings.first,
-      ));
-      return;
-    }
-
-    if (candidate.receiver == pfmIntermediateReceiver) {
-      publish(TransferPlanState(
-        candidate: candidate,
-        options: options,
-        denomAdvice: advice,
-        warnings: [...result.warnings, ...candidate.plan.warnings],
-        blockedReason: 'This route passes through a chain the wallet has no '
-            'address for, so the first packet has nowhere safe to land. Choose '
-            'a direct channel, or unlock the wallet.',
-      ));
-      return;
-    }
-
-    publish(TransferPlanState(
-      candidate: candidate,
-      options: options,
-      denomAdvice: advice,
-      warnings: [...result.warnings, ...candidate.plan.warnings],
-      memoInspection:
-          validateMemo(candidate.plan.memo, receiver: candidate.receiver),
-    ));
   }
 
-  List<RouteHopOverride> _overrideList() => _overrides.values.toList();
-
-  Map<String, String> _intermediateReceivers(
-    RoutePlanResult result, {
-    required String sourceChainId,
-    required String destChainId,
-    String? phrase,
-    required int accountIndex,
-  }) {
-    if (phrase == null || !ChainCatalog.isLoaded) return const {};
-    final wanted = <String>{};
-    for (final candidate in result.candidates) {
-      for (final hop in candidate.plan.hops) {
-        final chainId = hop.counterpartyChainId;
-        if (chainId == null) continue;
-        if (chainId == sourceChainId || chainId == destChainId) continue;
-        wanted.add(chainId);
-      }
-    }
-    final out = <String, String>{};
-    for (final chainId in wanted) {
-      final chain = ChainCatalog.instance.find(chainId);
-      if (chain == null) continue;
-      try {
-        out[chainId] = WalletKernel.instance
-            .deriveAddress(
-              phrase: phrase,
-              chain: chain,
-              accountIndex: accountIndex,
-            )
-            .address;
-      } on Object {
-        // A chain whose address cannot be derived is left out; the planner then
-        // warns and the screen blocks rather than addressing a packet to "pfm".
-      }
-    }
-    return out;
+  @override
+  void dispose() {
+    _timer?.cancel();
+    unawaited(_settled.close());
+    super.dispose();
   }
 }
 
-final transferPlanControllerProvider = StateNotifierProvider.autoDispose<
-    TransferPlanController, TransferPlanState>(
-  (ref) => TransferPlanController(ref),
+final pendingTransfersProvider =
+    StateNotifierProvider<PendingTransfersController, PendingTransfersState>(
+  (ref) => PendingTransfersController(ref.watch(transferPollerProvider)),
 );
+
+/// The plan a pending record follows, for screens that only need its hops.
+List<RouteHop> hopsOf(PendingTransfer record) => record.plan.hops;

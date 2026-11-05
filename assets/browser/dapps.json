@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "_comment": "Default dApps on the Browser tab. Edit here, not in code. Every URL must be https; every icon is a bundled asset.",
+  "dapps": [
+    { "id": "safrochain-hub", "name": "Safrochain Hub", "url": "https://hub.safrochain.com", "icon": "assets/browser/icons/safrochain-hub.png" },
+    { "id": "osmosis", "name": "Osmosis", "url": "https://app.osmosis.zone", "icon": "assets/browser/icons/osmosis.png" },
+    { "id": "mintscan", "name": "Mintscan", "url": "https://www.mintscan.io", "icon": "assets/browser/icons/mintscan.png" },
+    { "id": "ibc-map", "name": "Zunia IBC Map", "url": "https://ibcmap.zunialab.com", "icon": "assets/browser/icons/ibc-map.png" }
+  ]
+}

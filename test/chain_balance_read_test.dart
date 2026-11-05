@@ -192,7 +192,7 @@ void main() {
     expect(failure.detail, 'balances is not a list');
   });
 
-  test('one failed leg fails the whole read rather than inventing a zero',
+  test('a failed rewards leg keeps the bank numbers and marks rewards unknown',
       () async {
     await serve({
       '/bank/': json({
@@ -206,8 +206,84 @@ void main() {
 
     final read = await client.balance(chain(), address);
 
+    // The bank answered, so what it holds is a fact; the rewards are not.
+    expect(read, isA<BalanceLoaded>());
+    final balance = (read as BalanceLoaded).balance;
+    expect(balance.available, '500000000');
+    expect(balance.stakingKnown, isTrue);
+    expect(balance.rewardsKnown, isFalse);
+  });
+
+  test('a staking route the chain does not serve is a real zero', () async {
+    await serve({
+      '/bank/': json({
+        'balances': [
+          {'denom': 'utest', 'amount': '7'},
+        ],
+      }),
+      // Noble-style: no distribution or staking module behind the gateway.
+      '/staking/': json({'code': 12, 'message': 'Not Implemented'}, status: 501),
+      '/distribution/': json({'code': 12, 'message': 'Not Implemented'}, status: 501),
+    });
+
+    final read = await client.balance(chain(), address);
+
+    final balance = (read as BalanceLoaded).balance;
+    expect(balance.staked, '0');
+    expect(balance.stakingKnown, isTrue);
+    expect(balance.rewardsKnown, isTrue);
+  });
+
+  test('a failed bank leg fails the whole read', () async {
+    await serve({
+      '/bank/': json({'error': 'boom'}, status: 503),
+      '/staking/': json({'delegation_responses': <Object>[]}),
+      '/distribution/': json({'total': <Object>[]}),
+    });
+
+    final read = await client.balance(chain(), address);
+
     expect(read, isA<BalanceUnavailable>());
     expect((read as BalanceUnavailable).failure.statusCode, 503);
+  });
+
+  test('every held denom is listed, following the bank pages', () async {
+    var pages = 0;
+    await serve({
+      '/bank/': (request) async {
+        pages++;
+        final second = request.uri.queryParameters['pagination.key'] == 'cGFnZTI=';
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(second
+            ? {
+                'balances': [
+                  {'denom': 'factory/test1abc/uflower', 'amount': '3'},
+                ],
+                'pagination': {'next_key': null},
+              }
+            : {
+                'balances': [
+                  {'denom': 'ibc/ABC', 'amount': '12'},
+                  {'denom': 'utest', 'amount': '0'},
+                ],
+                'pagination': {'next_key': 'cGFnZTI='},
+              }));
+        await request.response.close();
+      },
+      '/staking/': json({'delegation_responses': <Object>[]}),
+      '/distribution/': json({'total': <Object>[]}),
+    });
+
+    final read = await client.balance(chain(), address);
+
+    expect(pages, 2);
+    final balance = (read as BalanceLoaded).balance;
+    expect(balance.available, '0');
+    // Zero rows are not holdings; every other row is, as the chain spelled it.
+    expect(
+      {for (final token in balance.tokens) token.denom: token.amount},
+      {'ibc/ABC': '12', 'factory/test1abc/uflower': '3'},
+    );
   });
 
   test('a denom absent from a truncated page is unknown, not zero', () async {
