@@ -11,6 +11,7 @@ import 'package:zunia_core/zunia_core.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/screens/swap_review_screen.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/swap_fee.dart';
 import 'package:zunia_mobile/tx/tx_engine.dart';
 import 'package:zunia_mobile/tx/tx_msg.dart';
@@ -66,12 +67,15 @@ void main() {
     List<TxMsg> Function(PreparedSwap prepared)? msgs,
     Size size = const Size(320, 640),
     double textScale = 1,
+    EntryPointCheck entryPoint = const EntryPointCheck.ready(),
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final container = ProviderContainer(overrides: swapOverrides());
+    final container = ProviderContainer(
+      overrides: swapOverrides(entryPoint: entryPoint),
+    );
     addTearDown(container.dispose);
     late PreparedSwap prepared;
     await tester.runAsync(() async {
@@ -149,7 +153,30 @@ void main() {
   );
 
   testWidgets(
-    'a cross-chain swap says the fee is not refunded if the swap fails on Osmosis',
+    'a cross-chain swap through the contract says the fee is not refunded if the swap fails on Osmosis',
+    (tester) async {
+      await pumpReview(
+        tester,
+        from: 'cosmoshub-4:uatom',
+        to: 'osmosis-1:uosmo',
+        amount: '1',
+        size: const Size(390, 1000),
+        entryPoint: const EntryPointCheck.unavailable(entryPointMismatch),
+      );
+      expect(
+        find.text(
+          'If the swap fails on Osmosis, the amount swapped comes back to you, but the 0.5% Zunia fee does not.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Zunia fee (0.5%)'), findsOneWidget);
+      expect(find.text('0.005 ATOM'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a one-signature swap says the tokens come back if the swap fails, and the fee does not',
     (tester) async {
       await pumpReview(
         tester,
@@ -160,12 +187,11 @@ void main() {
       );
       expect(
         find.text(
-          'If the swap fails on Osmosis, the amount swapped comes back to you, but the 0.5% Zunia fee does not.',
+          'If the swap fails on Osmosis (the price moved past your minimum, or the swap window closed), it is refused and your ATOM comes back to your address on Cosmos Hub, but the 0.5% Zunia fee does not.',
         ),
         findsOneWidget,
       );
-      expect(find.text('Zunia fee (0.5%)'), findsOneWidget);
-      expect(find.text('0.005 ATOM'), findsOneWidget);
+      expect(find.text('Delivered on Osmosis · one signature'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );

@@ -1,12 +1,15 @@
-/// The To a swap opens on when the user has not picked one.
+/// The To a swap opens on when the user has not picked one, and how SAF goes.
 ///
-/// Selling SAF on Safrochain: the contract's route table has no SAF route, so
-/// every row needs the tokens moved to Osmosis first. The default is then
-/// USDC on Osmosis, where pool 3600 pairs SAF, never a held voucher elsewhere
-/// (USDC.inj on Safrochain would need the output sent on through Injective).
+/// Selling SAF on Safrochain: the contract's route table has no SAF route, but
+/// SAF reaches Osmosis in one hop (Safrochain channel-1, arriving as
+/// `transfer/channel-110497/usaf`), so Skip Go's entry point swaps it in one
+/// signature. The default is USDC on Osmosis, where pool 3600 pairs SAF, never
+/// a held voucher elsewhere (USDC.inj on Safrochain would need the output sent
+/// on through Injective).
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:zunia_mobile/swap/one_signature.dart';
 import 'package:zunia_mobile/swap/swap_assets.dart';
 import 'package:zunia_mobile/swap/swap_path.dart';
 import 'package:zunia_mobile/swap/xcs_routes.dart';
@@ -63,15 +66,46 @@ void main() {
     expect(rows.where((row) => row.disabledReason == notTradedReason('SAF')), isEmpty);
   });
 
-  test('sells SAF on Safrochain for USDC on Osmosis by default', () {
+  test('sells SAF on Safrochain for USDC on Osmosis by default, in one signature', () {
     final saf = held('safrochain-1:usaf');
-    final to = pickTo(buy(saf), null, fromChainId: saf.chainId)!;
+    bool reaches(SwapAsset to) => oneSignatureReaches(saf, to, data.book);
+    final to = pickTo(
+      buy(saf),
+      null,
+      fromChainId: saf.chainId,
+      oneSignature: reaches,
+    )!;
     expect(to.chainId, 'osmosis-1');
     expect(to.identity.family, 'USDC');
+    expect(reaches(to), isTrue);
+    expect(
+      swapPathFor(
+        saf.chainId,
+        to.chainId,
+        to.executable,
+        venueChainId: 'osmosis-1',
+        oneSignature: reaches(to),
+      ),
+      SwapPath.oneSignature,
+    );
+    // Without the entry point the same pair still moves to Osmosis first.
     expect(
       swapPathFor(saf.chainId, to.chainId, to.executable, venueChainId: 'osmosis-1'),
       SwapPath.moveFirst,
     );
+  });
+
+  test('SAF reaches Osmosis over Safrochain channel-1 and arrives as its listed voucher', () {
+    final saf = held('safrochain-1:usaf');
+    final inbound = venueInboundOf(saf, data.book)!;
+    expect(inbound.channelId, 'channel-1');
+    expect(inbound.port, 'transfer');
+    expect(inbound.arrivalDenom, safOnOsmosis);
+  });
+
+  test('USDC.inj held on Safrochain does not reach Osmosis in one hop', () {
+    final voucher = held('safrochain-1:$usdcInjOnSafrochain');
+    expect(venueInboundOf(voucher, data.book), isNull);
   });
 
   test('SAF rows are offered without a seal, and ATOM keeps its seal', () {

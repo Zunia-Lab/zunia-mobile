@@ -520,12 +520,16 @@ const String _noPoolRoute =
     'Osmosis has no pool route for this pair at this amount, so there is nothing to sign.';
 const String _routesInvalid =
     "The Osmosis router's routes for this swap do not add up to the amount you sell, so Zunia will not sign them.";
+const String _splitRoute =
+    'The Osmosis router split this swap across several routes, and a one-signature swap takes one, so Zunia will not sign it. Try a smaller amount.';
 const String _noFloor =
     'At this amount the swap would pay out so little that its minimum rounds to nothing, so Zunia will not sign it.';
 
 /// Price selling [amountBaseUnits] of [venueInputDenom] for
 /// [venueOutputDenom] in Osmosis's pools, along the router's best route, and
-/// work out the order and the floor the message will carry.
+/// work out the order and the floor the message will carry. [singleRoute]
+/// asks the router for one route only (the entry point's `swap_exact_asset_in`
+/// takes one), and refuses a split it returns anyway.
 Future<PoolQuote> quotePoolSwap({
   required String venueInputDenom,
   required String venueOutputDenom,
@@ -534,6 +538,7 @@ Future<PoolQuote> quotePoolSwap({
   required LcdClient venueLcd,
   required LcdClient router,
   String Function(InterchainError error)? describe,
+  bool singleRoute = false,
 }) async {
   if (venueInputDenom == venueOutputDenom) {
     return const PoolQuote(
@@ -558,6 +563,7 @@ Future<PoolQuote> quotePoolSwap({
         tokenOutDenom: venueOutputDenom,
         slippagePercent: slippagePercent,
         router: router,
+        singleRoute: singleRoute,
       ),
       venueLcd,
     );
@@ -571,6 +577,13 @@ Future<PoolQuote> quotePoolSwap({
     return PoolQuote(error: describe?.call(error) ?? error.message);
   }
   final routes = poolRoutesOf(quote, amountBaseUnits);
+  if (routes != null && singleRoute && routes.length != 1) {
+    return PoolQuote(
+      quote: quote,
+      error: _splitRoute,
+      code: PoolQuoteBlockedCode.routesInvalid,
+    );
+  }
   if (routes == null) {
     return PoolQuote(
       quote: quote,
