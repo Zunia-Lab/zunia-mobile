@@ -4,18 +4,14 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/notifications/device_alerts.dart';
-import 'package:zunia_mobile/notifications/notices.dart';
 import 'package:zunia_mobile/notifications/notifications.dart';
 import 'package:zunia_mobile/notifications/notify_prefs.dart';
 import 'package:zunia_mobile/screens/chain_detail_screen.dart';
 import 'package:zunia_mobile/screens/governance_screen.dart';
 import 'package:zunia_mobile/screens/notification_settings_screen.dart';
 import 'package:zunia_mobile/screens/preferences_screen.dart';
-import 'package:zunia_mobile/services/chain_client.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
-import 'package:zunia_mobile/state/staking.dart';
-import 'package:zunia_mobile/util/amounts.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
 /// Root tab a notice asks to show. RootShell listens and switches to it.
@@ -88,48 +84,14 @@ class NotificationsScreen extends ConsumerStatefulWidget {
 class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
   NoticeKind? _filter;
 
-  @override
-  void initState() {
-    super.initState();
-    // History is read only while this screen is open, as the extension's
-    // popup does: the engine's own sources are the sockets and the slow pass.
-    ref.listenManual<AsyncValue<List<ActivityItem>>>(
-      allActivityProvider,
-      (_, next) => _feedHistory(next.valueOrNull ?? const []),
-      fireImmediately: true,
-    );
-  }
-
-  void _feedHistory(List<ActivityItem> items) {
-    final rows = <ReceivedNoticeInput>[];
-    for (final item in items) {
-      if (item.kind != ActivityKind.received || !item.success) continue;
-      final chain = catalogChain(item.chainId);
-      final amount = item.amount;
-      final meta = chain != null && amount != null && !amount.startsWith('-')
-          ? '${formatBaseUnitsExact(amount, decimals: chain.coinDecimals, maxFractionDigits: 6)} '
-              '${chain.coinDenom}'
-          : item.subtitle;
-      rows.add(
-        ReceivedNoticeInput(
-          chainId: item.chainId,
-          hash: item.hash,
-          meta: meta,
-          timestamp: item.timestamp.millisecondsSinceEpoch,
-        ),
-      );
-    }
-    // Never during a build: the first call comes from initState, and the
-    // engine's state is a provider other widgets are building from.
-    scheduleMicrotask(() {
-      if (mounted) ref.read(noticeEngineProvider.notifier).setReceived(rows);
-    });
-  }
-
+  // The engine's provider feeds it the history (received transfers) as
+  // soon as it is read, so this screen only asks for a fresh read.
   Future<void> _refresh() async {
-    ref.invalidate(allActivityProvider);
     ref.invalidate(alertPermissionProvider);
-    await ref.read(noticeEngineProvider.notifier).refreshNow();
+    await Future.wait([
+      ref.read(activityFeedProvider.notifier).refresh(),
+      ref.read(noticeEngineProvider.notifier).refreshNow(),
+    ]);
   }
 
   void _openSettings() {

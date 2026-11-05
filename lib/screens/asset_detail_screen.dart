@@ -66,7 +66,20 @@ class AssetDetailScreen extends ConsumerWidget {
     final held = balance?.tokens.where((t) => t.denom == target).firstOrNull;
     final identity = native ? nativeIdentity(chain) : rowIdentity(chain, held ?? HeldToken(denom: target, amount: '0'));
     final scale = AmountScale.of(identity);
-    final amount = native ? balance?.available : (balance == null ? null : held?.amount ?? '0');
+    // The coin's balance is everything the account holds of it: spendable,
+    // staked, unbonding and earned (the rows below split it). A leg the chain
+    // did not answer is left out, as on Home.
+    String? nativeTotal() {
+      if (balance == null) return null;
+      BigInt units(String value) => BigInt.tryParse(value) ?? BigInt.zero;
+      return (units(balance.available) +
+              (balance.stakingKnown ? units(balance.staked) : BigInt.zero) +
+              (balance.unbondingKnown ? units(balance.unbonding) : BigInt.zero) +
+              (balance.rewardsKnown ? units(balance.rewards) : BigInt.zero))
+          .toString();
+    }
+
+    final amount = native ? nativeTotal() : (balance == null ? null : held?.amount ?? '0');
     final exchange = snapshot == null ? const <String>{} : exchangePricedChains(snapshot);
     final priceChain = priceChainOf(identity, exchangePriced: exchange);
     final spot = priceChain == null ? null : snapshot?.prices[priceChain];
@@ -95,7 +108,7 @@ class AssetDetailScreen extends ConsumerWidget {
                         style: zuniaSans(fontSize: 22, fontWeight: FontWeight.w600, letterSpacing: -0.5, color: s.fg)),
                     Text(tokenText(identity, TokenTextVariant.row),
                         style: zuniaSans(fontSize: 13, color: s.fgMuted)),
-                    if (identity.proven)
+                    if (identity.showsSeal)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
                         child: Row(
@@ -155,6 +168,8 @@ class AssetDetailScreen extends ConsumerWidget {
               label: 'Staked',
               value: hidden ? maskedAmount : (balance != null && !balance.stakingKnown ? 'Not read' : fmt(balance?.staked)),
             ),
+            if (balance != null && balance.unbondingKnown && balance.unbonding != '0')
+              _Stat(label: 'Unbonding', value: hidden ? maskedAmount : fmt(balance.unbonding)),
             _Stat(
               label: 'Rewards',
               value: hidden ? maskedAmount : (balance != null && !balance.rewardsKnown ? 'Not read' : fmt(balance?.rewards)),
@@ -281,7 +296,9 @@ String? _pathText(TokenIdentity identity) {
 String _provenanceText(TokenIdentity identity) => switch (identity.provenance) {
       TokenProvenance.native => identity.listed ? 'Its own chain' : 'Nothing lists it',
       TokenProvenance.catalog => 'The chain registry',
-      TokenProvenance.table => 'The verified token table',
+      // Osmosis lists the asset without having verified it: not "verified".
+      TokenProvenance.table =>
+        identity.unverifiedOnOsmosis ? 'The Osmosis asset list, not verified yet' : 'The verified token table',
       TokenProvenance.channelWalk => identity.proven ? 'A checked channel walk' : 'A channel walk, not verified',
       TokenProvenance.unknown => 'Nothing proves it',
     };

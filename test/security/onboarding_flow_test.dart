@@ -127,7 +127,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   }, skip: kernelSkip != false);
 
-  testWidgets('restore: checked as typed, and not marked verified',
+  testWidgets('restore: checked as typed, finished without a backup check, and never called unverified',
       (tester) async {
     await pump(tester, const OnboardingScreen(initialMode: OnboardingMode.import));
     await tester.tap(find.textContaining('I will never share'));
@@ -146,14 +146,17 @@ void main() {
     await tapText(tester, 'Continue');
 
     await choosePassword(tester);
-    await tapText(tester, 'Continue · 3');
-    expect(find.text('Check your written copy?'), findsOneWidget);
-    await tapAndSettle(tester, find.text('Skip for now'));
+    // The phrase was just typed from the user's own copy: no check is
+    // offered or required, and the networks step finishes the restore.
+    await tapAndSettle(tester, find.textContaining('Restore wallet'));
+    expect(find.text('Check your written copy?'), findsNothing);
+    expect(find.text('Skip for now'), findsNothing);
+    // Offered biometric unlock: not now.
     await tapAndSettle(tester, find.text('Not now'));
 
     expect(container.read(sessionProvider)!.phrases.values.single, _restore);
     final wallet = container.read(walletProvider);
-    expect(wallet.phraseOf(wallet.active!)!.backupVerified, isFalse);
+    expect(wallet.phraseOf(wallet.active!)!.backupVerified, isTrue);
     await tester.pumpWidget(const SizedBox());
   }, skip: kernelSkip != false);
 }

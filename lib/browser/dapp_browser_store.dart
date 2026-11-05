@@ -14,6 +14,7 @@ class BrowserBookmark {
     required this.url,
     required this.title,
     required this.visitedAt,
+    this.iconUrl,
   });
 
   factory BrowserBookmark.fromJson(Map<String, dynamic> json) =>
@@ -23,11 +24,15 @@ class BrowserBookmark {
         visitedAt: DateTime.fromMillisecondsSinceEpoch(
           (json['visitedAt'] as num?)?.toInt() ?? 0,
         ),
+        iconUrl: json['iconUrl'] as String?,
       );
 
   final String url;
   final String title;
   final DateTime visitedAt;
+
+  /// The page's own favicon URL captured when it loaded, if any.
+  final String? iconUrl;
 
   String get host => Uri.tryParse(url)?.host ?? url;
 
@@ -35,6 +40,7 @@ class BrowserBookmark {
         'url': url,
         'title': title,
         'visitedAt': visitedAt.millisecondsSinceEpoch,
+        if (iconUrl != null) 'iconUrl': iconUrl,
       };
 }
 
@@ -72,11 +78,15 @@ class DappBrowserStore {
 
   /// Only https pages are remembered: an http or data: page is never a place
   /// to come back to with a wallet.
-  Future<void> touchRecent({required String url, required String title}) async {
+  Future<void> touchRecent({required String url, required String title, String? iconUrl}) async {
     if (Uri.tryParse(url)?.scheme != 'https') return;
     final list = await recents();
+    final old = list.where((b) => b.url == url).firstOrNull;
     list.removeWhere((b) => b.url == url);
-    list.insert(0, BrowserBookmark(url: url, title: title, visitedAt: DateTime.now()));
+    list.insert(
+      0,
+      BrowserBookmark(url: url, title: title, visitedAt: DateTime.now(), iconUrl: iconUrl ?? old?.iconUrl),
+    );
     await _write(_kRecents, list.take(_maxRecents).toList());
   }
 
@@ -95,13 +105,13 @@ class DappBrowserStore {
 
   /// Adds the page, or removes it when it is already saved. Returns whether it
   /// is saved now.
-  Future<bool> toggleBookmark({required String url, required String title}) async {
+  Future<bool> toggleBookmark({required String url, required String title, String? iconUrl}) async {
     final list = await bookmarks();
     final index = list.indexWhere((b) => b.url == url);
     if (index >= 0) {
       list.removeAt(index);
     } else {
-      list.insert(0, BrowserBookmark(url: url, title: title, visitedAt: DateTime.now()));
+      list.insert(0, BrowserBookmark(url: url, title: title, visitedAt: DateTime.now(), iconUrl: iconUrl));
     }
     await _write(_kBookmarks, list);
     return index < 0;

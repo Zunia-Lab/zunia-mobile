@@ -118,15 +118,17 @@ List<OsmosisListing> parseOsmosisTokenMetadata(Object? body) {
   return out;
 }
 
-/// The listed rows the bundled table proves on Osmosis and Osmosis neither
-/// leaves unverified nor flags unstable, in the listing's order.
+/// The listed rows the bundled table proves on Osmosis, in the listing's
+/// order: the ones Osmosis verified, and the staking coins of Zunia's own
+/// mainnets it lists before its review (`listedByZunia`: SAF, traded in pool
+/// 3600), never one it flags unstable.
 List<OsmosisAsset> osmosisSwapAssets(
   List<OsmosisListing> listed,
   SwapTokenBook book,
 ) {
   final rows = <String, SwapTokenTableRow>{
     for (final row in book.rowsOn(kOsmosisChainId))
-      if (row.verified && row.stable) row.denom: row,
+      if ((row.verified || row.listedByZunia) && row.stable) row.denom: row,
   };
   final out = <OsmosisAsset>[];
   final seen = <String>{};

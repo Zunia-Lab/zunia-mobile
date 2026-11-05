@@ -20,6 +20,7 @@ import 'package:zunia_mobile/browser/provider_errors.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/connect/cosmos_signing.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
+import 'package:zunia_mobile/tokens/token_identity.dart' show identityOf;
 import 'package:zunia_mobile/util/amounts.dart';
 
 /// One message of a transaction, in the words the prompt shows.
@@ -241,13 +242,16 @@ String _grouped(String digits) {
 
 /// One coin a message moves, under its raw summary: `= 1.5 OSMO · native on
 /// Osmosis · verified by registry`. Null unless the registry entry names it;
-/// display only, nothing here is signed.
+/// display only, nothing here is signed. An asset Osmosis lists without
+/// having verified it (SAF while its review is open) keeps the line, without
+/// the word "verified": that word is Osmosis's to give.
 String? resolvedCoinLine(ChainEntry? chain, FeeCoin coin) {
   final currency = _currencyOf(chain, coin.denom);
   if (chain == null || currency == null || !_digits.hasMatch(coin.amount)) return null;
   final amount = formatBaseUnitsExact(coin.amount, decimals: currency.decimals);
   final where = currency.native ? 'native on ${chain.chainName}' : 'on ${chain.chainName}';
-  return '= $amount ${currency.symbol} · $where · verified by registry';
+  final line = '= $amount ${currency.symbol} · $where';
+  return identityOf(chain.chainId, coin.denom).unverifiedOnOsmosis ? line : '$line · verified by registry';
 }
 
 final _coinText = RegExp(r'^(\d+) ([A-Za-z][A-Za-z0-9/:._-]*)$');

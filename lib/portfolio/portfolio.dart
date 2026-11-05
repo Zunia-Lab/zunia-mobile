@@ -37,6 +37,8 @@ class HomeAsset {
     required this.fiatValue,
     required this.change24h,
     this.metadataName,
+    this.staked = '0',
+    this.rewards = '0',
   });
 
   /// `chainId:denom`.
@@ -44,8 +46,16 @@ class HomeAsset {
   final ChainEntry chain;
   final String denom;
 
-  /// Base units. '0' with [amountKnown] false when the chain was not read.
+  /// Base units the account can spend now. '0' with [amountKnown] false when
+  /// the chain was not read.
   final String amount;
+
+  /// The staking coin's row only: base units delegated or unbonding, as far
+  /// as the chain answered. Still the account's, so the row counts it.
+  final String staked;
+
+  /// The staking coin's row only: base units of rewards ready to claim.
+  final String rewards;
 
   /// The chain's balance was read: [amount] is a fact.
   final bool amountKnown;
@@ -57,7 +67,9 @@ class HomeAsset {
   /// `Noble USDC · on Osmosis`, `Native on Injective`.
   final String subtitle;
 
-  /// Fiat value, or null when no trusted price applies.
+  /// Fiat value of everything the row stands for: for the staking coin, what
+  /// is spendable plus what is staked, unbonding and earned. Null when no
+  /// trusted price applies.
   final double? fiatValue;
   final double? change24h;
 
@@ -66,8 +78,17 @@ class HomeAsset {
 
   bool get staking => group == AssetGroupKind.native;
 
-  /// A positive integer balance.
-  bool get held => amountKnown && RegExp(r'^\d*[1-9]\d*$').hasMatch(amount);
+  /// Base units the row shows: spendable plus staked and earned.
+  String get total => (_units(amount) + _units(staked) + _units(rewards)).toString();
+
+  /// Base units staked, unbonding or waiting to be claimed.
+  String get locked => (_units(staked) + _units(rewards)).toString();
+
+  /// Some of the row is staked, unbonding or waiting to be claimed.
+  bool get hasPosition => _units(staked) > BigInt.zero || _units(rewards) > BigInt.zero;
+
+  /// A positive integer balance, staked funds included.
+  bool get held => amountKnown && RegExp(r'^\d*[1-9]\d*$').hasMatch(total);
 
   AmountScale get scale => AmountScale.of(identity);
 }
@@ -161,6 +182,8 @@ TokenIdentity rowIdentity(ChainEntry chain, HeldToken token) =>
         ? nativeIdentity(chain)
         : heldTokenIdentity(chain.chainId, token.denom, metadataDecimals: token.metadataDecimals);
 
+BigInt _units(String amount) => BigInt.tryParse(amount) ?? BigInt.zero;
+
 HomeAsset _asset(
   ChainEntry chain,
   String denom,
@@ -170,9 +193,12 @@ HomeAsset _asset(
   PriceMap prices,
   Set<String> exchangePriced, {
   String? metadataName,
+  String staked = '0',
+  String rewards = '0',
 }) {
   final priceChain = priceChainOf(identity, exchangePriced: exchangePriced);
   final spot = priceChain == null ? null : prices[priceChain];
+  final total = (_units(amount) + _units(staked) + _units(rewards)).toString();
   return HomeAsset(
     key: '${chain.chainId}:$denom',
     chain: chain,
@@ -182,9 +208,11 @@ HomeAsset _asset(
     identity: identity,
     group: _groupOf(chain, identity),
     subtitle: assetSubtitle(identity),
-    fiatValue: spot == null || !known ? null : toWholeCoins(amount, identity.decimals) * spot.price,
+    fiatValue: spot == null || !known ? null : toWholeCoins(total, identity.decimals) * spot.price,
     change24h: spot?.change24h,
     metadataName: metadataName,
+    staked: staked,
+    rewards: rewards,
   );
 }
 
@@ -214,6 +242,15 @@ List<HomeAsset> homeAssets(
   for (final chain in chains) {
     final balance = balances[chain.chainId];
     final native = nativeIdentity(chain);
+    // The coin's row counts what is staked, unbonding and earned too: it is
+    // still the account's money. A leg the chain did not answer is left out,
+    // never counted as zero or guessed.
+    final staked = balance == null
+        ? BigInt.zero
+        : (balance.stakingKnown ? _units(balance.staked) : BigInt.zero) +
+            (balance.unbondingKnown ? _units(balance.unbonding) : BigInt.zero);
+    final rewards =
+        balance != null && balance.rewardsKnown ? _units(balance.rewards) : BigInt.zero;
     out.add(_asset(
       chain,
       chain.coinMinimalDenom,
@@ -222,6 +259,8 @@ List<HomeAsset> homeAssets(
       native,
       prices,
       exchangePriced,
+      staked: staked.toString(),
+      rewards: rewards.toString(),
     ));
     for (final token in balance?.tokens ?? const <HeldToken>[]) {
       if (token.denom == chain.coinMinimalDenom || token.amount == '0') continue;
@@ -383,14 +422,22 @@ PortfolioTotals computePortfolio(
     if (balance == null) {
       continue;
     }
-    if (row != null && row.fiatValue != null) add(chain.chainId, row.fiatValue!, row.change24h);
+    // The coin's row already counts what is spendable, staked, unbonding
+    // and earned (homeAssets); without a row, value the balance the same way.
     final stakedCoins = balance.stakingKnown ? toWholeCoins(balance.staked, chain.coinDecimals) : 0.0;
+    final unbondingCoins =
+        balance.unbondingKnown ? toWholeCoins(balance.unbonding, chain.coinDecimals) : 0.0;
     final rewards = balance.rewardsKnown ? toWholeCoins(balance.rewards, chain.coinDecimals) : 0.0;
-    final position = stakedCoins + rewards;
-    if (spot != null && position != 0) {
+    final position = stakedCoins + unbondingCoins + rewards;
+    if (row != null) {
+      if (row.fiatValue != null) add(chain.chainId, row.fiatValue!, row.change24h);
+    } else if (spot != null) {
+      final whole = toWholeCoins(balance.available, chain.coinDecimals) + position;
+      if (whole != 0) add(chain.chainId, whole * spot.price, spot.change24h);
+    }
+    if (spot != null) {
       staked += stakedCoins * spot.price;
       claimable += rewards * spot.price;
-      add(chain.chainId, position * spot.price, spot.change24h);
     }
     // The chain's coin is one asset, whether available, staked or earning.
     final held = (row?.held ?? false) || position > 0;

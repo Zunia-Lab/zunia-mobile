@@ -1,6 +1,5 @@
-/// The curated dApps on the Discover tab, read from
-/// `assets/browser/dapps.json` so the list is data, not constants spread over
-/// screens: the tab, the drawer's count and the tests all read the same file.
+/// The default dApps on the Browser tab, read from `assets/browser/dapps.json`
+/// so the list is data, not constants spread over screens.
 library;
 
 import 'dart:convert';
@@ -17,45 +16,36 @@ class CuratedDapp {
     required this.id,
     required this.name,
     required this.url,
-    required this.category,
-    required this.description,
-    this.chains = const [],
+    this.icon,
   });
 
+  /// Unknown or old fields (category, description, chains) are ignored.
   factory CuratedDapp.fromJson(Map<String, dynamic> json) => CuratedDapp(
         id: json['id'] as String,
         name: json['name'] as String,
         url: json['url'] as String,
-        category: json['category'] as String,
-        description: json['description'] as String? ?? '',
-        chains: [for (final c in (json['chains'] as List? ?? const [])) '$c'],
+        icon: json['icon'] as String?,
       );
 
   final String id;
   final String name;
   final String url;
-  final String category;
-  final String description;
 
-  /// Chains it mostly works on, for search.
-  final List<String> chains;
+  /// Bundled asset path of the site's real icon.
+  final String? icon;
 
   String get host => Uri.tryParse(url)?.host ?? url;
 
   bool matches(String query) {
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return true;
-    return name.toLowerCase().contains(q) ||
-        category.toLowerCase().contains(q) ||
-        description.toLowerCase().contains(q) ||
-        host.contains(q) ||
-        chains.any((c) => c.toLowerCase().contains(q));
+    return name.toLowerCase().contains(q) || host.contains(q);
   }
 }
 
 @immutable
 class CuratedDapps {
-  const CuratedDapps({required this.dapps, required this.categories, this.featuredId});
+  const CuratedDapps({required this.dapps});
 
   /// Reads the file; a row whose URL is not https is dropped rather than shown.
   factory CuratedDapps.parse(String raw) {
@@ -67,27 +57,10 @@ class CuratedDapps {
       if (Uri.tryParse(dapp.url)?.scheme != 'https') continue;
       dapps.add(dapp);
     }
-    return CuratedDapps(
-      dapps: dapps,
-      categories: [for (final c in (json['categories'] as List? ?? const [])) '$c'],
-      featuredId: json['featured'] as String?,
-    );
+    return CuratedDapps(dapps: dapps);
   }
 
   final List<CuratedDapp> dapps;
-  final List<String> categories;
-  final String? featuredId;
-
-  CuratedDapp? get featured {
-    for (final d in dapps) {
-      if (d.id == featuredId) return d;
-    }
-    return dapps.isEmpty ? null : dapps.first;
-  }
-
-  /// Categories that have at least one dApp, in the file's order.
-  List<String> get usedCategories =>
-      [for (final c in categories) if (dapps.any((d) => d.category == c)) c];
 }
 
 Future<CuratedDapps> loadCuratedDapps({AssetBundle? bundle}) async =>

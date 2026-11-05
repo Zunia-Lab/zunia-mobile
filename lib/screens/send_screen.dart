@@ -1049,7 +1049,7 @@ class _AmountCard extends StatelessWidget {
               const SizedBox(width: 8),
               Semantics(
                 button: true,
-                label: 'Token: ${tokenText(identity, TokenTextVariant.a11y)}${identity.proven ? ', verified' : ''}. Change',
+                label: 'Token: ${tokenText(identity, TokenTextVariant.a11y)}${identity.showsSeal ? ', verified' : ''}. Change',
                 excludeSemantics: true,
                 child: InkWell(
                   onTap: onPickToken,

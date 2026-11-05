@@ -267,6 +267,7 @@ class NoticeEngine extends StateNotifier<NoticeFeed> {
     ChainStreamFactory? openStream,
     DateTime Function()? clock,
     this.onBalancesMoved,
+    this.onResumed,
     bool observeLifecycle = true,
   })  : _alerts = alerts,
         _staking = StakingClient(reader),
@@ -293,6 +294,11 @@ class NoticeEngine extends StateNotifier<NoticeFeed> {
   /// Called when a chain event means the account's balances changed, so the
   /// portfolio can re-read them.
   final void Function(String chainId)? onBalancesMoved;
+
+  /// Called when the app comes back to the foreground with the engine
+  /// running: the sockets were down meanwhile, so what arrived then is only
+  /// in each chain's history, which the host reads again.
+  final void Function()? onResumed;
 
   late final Future<void> _ready;
   AppLifecycleListener? _lifecycle;
@@ -521,6 +527,7 @@ class NoticeEngine extends StateNotifier<NoticeFeed> {
     _syncStreams();
     _startTick();
     _lastRewardsAt = 0;
+    onResumed?.call();
     await pass();
   }
 

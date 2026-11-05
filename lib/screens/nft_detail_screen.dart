@@ -39,7 +39,6 @@ class NftDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = ZuniaSemanticsExt.of(context);
     final detail = ref.watch(nftTokenDetailProvider(_ref));
     final prefs = ref.watch(preferencesProvider);
     final mediaOn = prefs.liveReads && prefs.nftMedia;
@@ -98,47 +97,33 @@ class NftDetailScreen extends ConsumerWidget {
               ),
 
               if (value?.imageReason != null) ...[
-                const SizedBox(height: 14),
-                ZuniaCallout(
-                  tone: ZuniaCalloutTone.info,
-                  title: 'No artwork shown',
-                  body: value!.imageReason!,
-                ),
-                if (!prefs.liveReads) ...[
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: ZuniaButton(
-                      label: 'Open Settings',
-                      size: ZuniaButtonSize.sm,
-                      variant: ZuniaButtonVariant.secondary,
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const SettingsScreen(),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(child: _Note(value!.imageReason!)),
+                    if (!prefs.liveReads) ...[
+                      const SizedBox(width: 8),
+                      ZuniaButton(
+                        label: 'Open Settings',
+                        size: ZuniaButtonSize.sm,
+                        variant: ZuniaButtonVariant.secondary,
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SettingsScreen(),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                ],
+                    ],
+                  ],
+                ),
               ],
               if (value?.metadataReason != null) ...[
-                const SizedBox(height: 12),
-                ZuniaCallout(
-                  tone: ZuniaCalloutTone.info,
-                  title: 'Off-chain metadata was not read',
-                  body: value!.metadataReason!,
-                ),
+                const SizedBox(height: 8),
+                _Note(value!.metadataReason!),
               ],
               if (value?.metadataSource == NftMetadataSource.remote) ...[
-                const SizedBox(height: 12),
-                ZuniaCallout(
-                  tone: ZuniaCalloutTone.warning,
-                  title: 'Some of this came from a third party',
-                  body: 'Name, description and traits below the on-chain ones '
-                      'were served by the host this token points at, not by '
-                      'the chain. That host now knows this device looked at '
-                      'this token.',
-                ),
+                const SizedBox(height: 8),
+                const _Note('Some details come from the token\'s host.'),
               ],
 
               const SizedBox(height: 20),
@@ -171,16 +156,6 @@ class NftDetailScreen extends ConsumerWidget {
               _CopyRow(label: 'Collection address', value: collectionAddress),
               const SizedBox(height: 6),
               _CopyRow(label: 'Token id', value: tokenId),
-              const SizedBox(height: 10),
-              Text(
-                // The registry this wallet ships carries no explorer URLs for
-                // any chain, so there is no link to give. Inventing a domain
-                // would be worse than saying so.
-                'Zunia has no explorer configured for $chainId, so there is no '
-                'link to open. Copy the collection address and token id above '
-                'into the explorer you use.',
-                style: zuniaSans(fontSize: 12, height: 1.5, color: s.fgMuted),
-              ),
 
               const SizedBox(height: 22),
               const ZuniaSectionLabel('Move this collectible'),
@@ -234,25 +209,18 @@ class _Actions extends ConsumerWidget {
 
     String? blocked;
     if (account == null) {
-      blocked = 'This wallet has no address on $chainId, so it cannot sign a '
-          'transfer there.';
+      blocked = 'No address on $chainId.';
     } else if (!unlocked) {
-      blocked = 'Unlock the wallet to sign a transfer.';
+      blocked = 'Unlock the wallet to transfer.';
     } else if (!ownerKnown) {
-      blocked = 'The owner of this token has not been read, so Zunia will not '
-          'offer to move it. A transfer signed by an address that does not '
-          'hold it fails on chain and still costs the fee.';
+      blocked = 'Owner unknown, so transfer is unavailable.';
     } else if (!isMine) {
-      blocked = 'This token is held by another address, so this wallet cannot '
-          'move it.';
+      blocked = 'Held by another address.';
     }
 
     final crossBlocked = blocked ??
         (destinations.isEmpty
-            ? 'This build has no ICS721 bridge or channel configured for '
-                '$chainId, so there is no chain to send this to. The bridge '
-                'takes custody of the token, so Zunia will not guess its '
-                'address.'
+            ? 'No cross-chain route from $chainId yet.'
             : null);
 
     return Column(
@@ -260,9 +228,7 @@ class _Actions extends ConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         // Short labels on purpose: at 320dp a ZuniaButton's label row has
-        // 240dp of usable width and does not ellipsise, so "Transfer on this
-        // chain" overflowed it by 52dp. The sentence under the pair carries
-        // the meaning instead.
+        // 240dp of usable width and does not ellipsise.
         ZuniaButton(
           label: 'Transfer here',
           size: ZuniaButtonSize.lg,
@@ -309,21 +275,12 @@ class _Actions extends ConsumerWidget {
             ),
           ),
         ],
-        const SizedBox(height: 10),
-        Text(
-          'Transfer here hands the collectible to another address on '
-          '$chainId. Send cross-chain escrows it in a bridge contract and '
-          'mints a voucher on the other chain; the next screen says exactly '
-          'what that means before anything is signed.',
-          style: zuniaMono(fontSize: 10.5, height: 1.5, color: s.fgMuted),
-        ),
       ],
     );
   }
 }
 
-/// A selectable identifier with a copy affordance, for the explorer the wallet
-/// cannot link to.
+/// A selectable identifier with a copy affordance.
 class _CopyRow extends StatelessWidget {
   const _CopyRow({required this.label, required this.value});
 
@@ -372,6 +329,22 @@ class _CopyRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// One quiet line under the artwork: a reason, not an alert.
+class _Note extends StatelessWidget {
+  const _Note(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ZuniaSemanticsExt.of(context);
+    return Text(
+      text,
+      style: zuniaSans(fontSize: 12, height: 1.4, color: s.fgMuted),
     );
   }
 }

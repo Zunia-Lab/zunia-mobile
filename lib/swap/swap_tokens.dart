@@ -44,6 +44,7 @@ class SwapTokenTableRow {
     required this.sourceNetwork,
     required this.alloyed,
     required this.verified,
+    this.listedByZunia = false,
     required this.stable,
     required this.decimals,
     required this.logoUrl,
@@ -78,6 +79,12 @@ class SwapTokenTableRow {
   /// Osmosis lists the row as verified.
   final bool verified;
 
+  /// Osmosis lists the row without having verified it yet, and the row is the
+  /// staking coin of a mainnet in Zunia's own registry (Safrochain's SAF, traded
+  /// in pool 3600 while its review was pending). Hash-proven like every row;
+  /// Swap offers it as it offers a verified one.
+  final bool listedByZunia;
+
   /// Not flagged unstable or disabled by Osmosis.
   final bool stable;
   final int decimals;
@@ -109,6 +116,7 @@ class SwapTokenIdentity {
     required this.testnet,
     required this.coinGeckoId,
     required this.aliases,
+    this.unverifiedOnOsmosis = false,
   });
 
   /// `${chainId}:${denom}`, the key of every swap row.
@@ -143,6 +151,7 @@ class SwapTokenIdentity {
   final String? osmosisDenom;
 
   /// Origin and name both come from the catalog or the hash-verified table.
+  /// A seal needs it: see [showsSeal].
   final bool proven;
 
   /// Something names the token (false for a voucher nothing traces).
@@ -154,6 +163,16 @@ class SwapTokenIdentity {
 
   /// Other names users have seen (`USDC.noble`, `axlUSDC`), for search.
   final List<String> aliases;
+
+  /// Osmosis lists the asset but has not verified it: its row on osmosis-1 is
+  /// `listedByZunia` (SAF while osmosis-labs/assetlists#3876 is open). Listed,
+  /// quoted and swapped like any proven token; only the seal stays off, since
+  /// "verified" is Osmosis's word to give.
+  final bool unverifiedOnOsmosis;
+
+  /// Draw the seal: a proven identity Osmosis has not withheld its
+  /// verification from.
+  bool get showsSeal => proven && !unverifiedOnOsmosis;
 
   /// The picker's second line: where it is from and where it is.
   String get subtitle {
@@ -183,6 +202,7 @@ class SwapTokenIdentity {
     testnet: testnet,
     coinGeckoId: coinGeckoId,
     aliases: aliases,
+    unverifiedOnOsmosis: unverifiedOnOsmosis,
   );
 }
 
@@ -406,6 +426,7 @@ class SwapTokenBook {
           sourceNetwork: _networks.contains(network) ? network : null,
           alloyed: flags >= 0 && (flags & 1) != 0,
           verified: flags >= 0 && (flags & 2) != 0,
+          listedByZunia: flags >= 0 && (flags & 8) != 0,
           stable: flags >= 0 && (flags & 4) != 0,
           decimals: number(12),
           logoUrl: number(13) >= 0 && number(13) < logos.length
@@ -618,6 +639,7 @@ class SwapTokenBook {
       final osmosis = chainId == kOsmosisChainId
           ? denom
           : osmosisDenomOf(originChainId, originDenom);
+      final listing = osmosis == null ? null : rowOf(kOsmosisChainId, osmosis);
       return SwapTokenIdentity(
         chainId: chainId,
         chainName: chainName,
@@ -637,6 +659,7 @@ class SwapTokenBook {
         testnet: testnet,
         coinGeckoId: coinGeckoId,
         aliases: aliases,
+        unverifiedOnOsmosis: listing != null && !listing.verified,
       );
     }
 

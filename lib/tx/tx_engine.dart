@@ -134,25 +134,44 @@ class TxEngine {
       address: signer,
     );
     final accountNumber = int.parse(account.accountNumber);
-    final sequence = int.parse(account.sequence);
+    // A public node can answer a block late, right after this account's last
+    // transaction: never quote below the sequence that one already used.
+    var sequence = SequenceFloor.instance.atLeast(
+      chain.chainId,
+      signer,
+      int.parse(account.sequence),
+    );
     final msgJson = [for (final m in msgs) m.toJson()];
     final core = _kernel.core;
 
     int? gasUsed;
     String? feeNote;
     int gasLimit;
-    try {
+    Future<int> simulateAt(int at) {
       final simulateHex = core.buildSimulateTx(
         chainId: chain.chainId,
         msgs: msgJson,
         fee: ZuniaFee(amount: const [], gasLimit: fallbackGasLimit),
         memo: memo,
         accountNumber: accountNumber,
-        sequence: sequence,
+        sequence: at,
         publicKeyHex: derived.publicKeyHex,
         ethKeyType: chain.usesEthKeySign,
       );
-      gasUsed = await _simulate(chain, base64Encode(bytesOfHex(simulateHex)));
+      return _simulate(chain, base64Encode(bytesOfHex(simulateHex)));
+    }
+
+    try {
+      try {
+        gasUsed = await simulateAt(sequence);
+      } on TxException catch (e) {
+        // The node says which sequence it expects: simulate once more with it,
+        // and quote that one, rather than a fee from a fixed gas limit.
+        final expected = isSequenceMismatch(e.message) ? expectedSequenceOf(e.message) : null;
+        if (expected == null || expected == sequence) rethrow;
+        sequence = expected;
+        gasUsed = await simulateAt(sequence);
+      }
       gasLimit = (gasUsed * gasAdjustment).ceil();
     } on TxException catch (e) {
       gasLimit = fallbackGasLimit;
@@ -231,6 +250,16 @@ class TxEngine {
 
   /// Signs exactly what [quote] described and broadcasts it. Returns the
   /// transaction hash.
+  ///
+  /// The account's sequence is read again just before signing. A quote can
+  /// wait on the review screen while another transaction from this account
+  /// lands (a send from another device, a claim), and a retry after a refusal
+  /// used to sign the same stale sequence again, so "account sequence
+  /// mismatch" repeated until the review was closed. When the chain still
+  /// refuses the sequence, the transaction is signed once more with the one
+  /// it expects. Only the sequence (and, for an account that did not exist
+  /// when quoted, its number) can differ from the review: the messages, fee
+  /// and memo are the ones whose sign bytes the user saw.
   Future<String> signAndBroadcast({
     required String phrase,
     required int accountIndex,
@@ -263,26 +292,65 @@ class TxEngine {
         'The transaction changed after you reviewed it. Review it again before signing.',
       );
     }
-    final txHex = core.signTx(
-      phrase: phrase,
-      chainJson: quote.chain.toChainJson(),
-      accountIndex: accountIndex,
-      chainId: quote.chain.chainId,
-      msgs: msgJson,
-      fee: quote.fee,
-      memo: quote.memo,
-      accountNumber: quote.accountNumber,
-      sequence: quote.sequence,
-      mode: ZuniaSignMode.direct,
-    );
+    final chainId = quote.chain.chainId;
+    var accountNumber = quote.accountNumber;
+    var sequence = quote.sequence;
     try {
-      final result = await _broadcast.broadcast(
-        chainId: quote.chain.chainId,
-        txBytesBase64: base64Encode(bytesOfHex(txHex)),
+      final live = await _broadcast.fetchAccount(chainId: chainId, address: quote.signer);
+      final liveNumber = int.parse(live.accountNumber);
+      // An account that did not exist when quoted has a number now.
+      if (accountNumber == 0 && liveNumber != 0) accountNumber = liveNumber;
+      sequence = math.max(sequence, int.parse(live.sequence));
+    } on Object {
+      // The quoted numbers still stand; a refusal below is retried.
+    }
+    sequence = SequenceFloor.instance.atLeast(chainId, quote.signer, sequence);
+
+    for (var attempt = 0; ; attempt++) {
+      final txHex = core.signTx(
+        phrase: phrase,
+        chainJson: quote.chain.toChainJson(),
+        accountIndex: accountIndex,
+        chainId: chainId,
+        msgs: msgJson,
+        fee: quote.fee,
+        memo: quote.memo,
+        accountNumber: accountNumber,
+        sequence: sequence,
+        mode: ZuniaSignMode.direct,
       );
-      return result.txhash;
-    } on BroadcastException catch (e) {
-      throw TxException(explainChainError(e.message), txhash: e.txhash);
+      try {
+        final result = await _broadcast.broadcast(
+          chainId: chainId,
+          txBytesBase64: base64Encode(bytesOfHex(txHex)),
+        );
+        SequenceFloor.instance.remember(chainId, quote.signer, sequence + 1);
+        return result.txhash;
+      } on BroadcastException catch (e) {
+        if (attempt == 0 && isSequenceMismatch(e.message, code: e.code)) {
+          final expected = expectedSequenceOf(e.message) ?? await _liveSequence(chainId, quote.signer);
+          if (expected != null && expected != sequence) {
+            sequence = expected;
+            continue;
+          }
+        }
+        // A transaction the node refused at check time never reached a block,
+        // so its hash leads nowhere: the failure screen offers to go back to
+        // the review instead of an explorer link.
+        throw TxException(
+          explainChainError(e.message),
+          txhash: e.code == null ? e.txhash : null,
+        );
+      }
+    }
+  }
+
+  Future<int?> _liveSequence(String chainId, String address) async {
+    try {
+      final live = await _broadcast.fetchAccount(chainId: chainId, address: address);
+      return int.parse(live.sequence);
+    } on Object {
+      return null;
     }
   }
 
@@ -409,4 +477,60 @@ String explainChainError(String raw) {
   }
   if (plain == null) return text;
   return text.isEmpty ? plain : '$plain ($text)';
+}
+
+/// Whether a refusal is the chain's sequence check (SDK error code 32, or its
+/// words when a node returns only the log).
+bool isSequenceMismatch(String message, {int? code}) {
+  if (code == 32) return true;
+  final lower = message.toLowerCase();
+  return lower.contains('account sequence mismatch') ||
+      lower.contains('incorrect account sequence');
+}
+
+/// The sequence the chain says it expects (`…, expected 12, got 11: …`), or
+/// null when the refusal does not say.
+int? expectedSequenceOf(String message) {
+  final match = RegExp(r'expected\s+(\d+)', caseSensitive: false).firstMatch(message);
+  return match == null ? null : int.tryParse(match.group(1)!);
+}
+
+/// The next sequence each account used, for a short while after a broadcast.
+///
+/// Public nodes behind a load balancer can answer an account query from a
+/// block before this account's last transaction, so the next quote would read
+/// the sequence that transaction already used and be refused. Kept in memory
+/// only, and only for [ttl]: after that the chain's own answer is trusted.
+class SequenceFloor {
+  SequenceFloor({this.ttl = const Duration(minutes: 2), DateTime Function()? now})
+      : _now = now ?? DateTime.now;
+
+  static final instance = SequenceFloor();
+
+  final Duration ttl;
+  final DateTime Function() _now;
+  final _next = <String, ({int sequence, DateTime at})>{};
+
+  void remember(String chainId, String address, int next) {
+    final key = '$chainId|$address';
+    final current = _next[key];
+    if (current != null && current.sequence > next && _fresh(current.at)) return;
+    _next[key] = (sequence: next, at: _now());
+  }
+
+  /// [sequence], raised to the remembered next one while it is fresh.
+  int atLeast(String chainId, String address, int sequence) {
+    final key = '$chainId|$address';
+    final floor = _next[key];
+    if (floor == null) return sequence;
+    if (!_fresh(floor.at)) {
+      _next.remove(key);
+      return sequence;
+    }
+    return math.max(sequence, floor.sequence);
+  }
+
+  bool _fresh(DateTime at) => _now().difference(at) < ttl;
+
+  void clear() => _next.clear();
 }

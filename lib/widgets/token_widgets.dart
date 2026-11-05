@@ -39,7 +39,7 @@ class TokenAvatar extends StatelessWidget {
       symbol: identity.family.isEmpty ? identity.ticker : identity.family,
       iconUrl: identity.logoUrl,
       size: size,
-      verified: identity.proven && !badge,
+      verified: identity.showsSeal && !badge,
     );
     if (!badge) return ExcludeSemantics(child: logo);
     final badgeSize = size * 0.46;

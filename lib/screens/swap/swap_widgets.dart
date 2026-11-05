@@ -39,7 +39,7 @@ class SwapTokenMark extends StatelessWidget {
               symbol: identity.ticker,
               iconUrl: identity.logoUrl,
               size: size,
-              verified: identity.proven && size >= 28 && ownCoin,
+              verified: identity.showsSeal && size >= 28 && ownCoin,
             ),
             if (!ownCoin)
               Positioned(

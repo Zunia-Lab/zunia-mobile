@@ -60,8 +60,10 @@ class WalletsScreen extends ConsumerWidget {
       actions: [
         const ZuniaAlertAction(label: 'Rename', value: 'rename'),
         const ZuniaAlertAction(label: 'Show recovery phrase', value: 'reveal'),
-        if (info != null && !info.backupVerified)
-          const ZuniaAlertAction(label: 'Verify backup', value: 'verify'),
+        // Optional, for any phrase: never a status, so a restored wallet is
+        // not called unverified.
+        if (info != null)
+          const ZuniaAlertAction(label: 'Check written copy', value: 'verify'),
         if (wallet.accounts.length > 1)
           const ZuniaAlertAction(
             label: 'Remove from this device',
@@ -198,13 +200,9 @@ class WalletsScreen extends ConsumerWidget {
 
   String _subtitle(WidgetRef ref, WalletData wallet, WalletAccount account) {
     final address = accountAddress(ref, account);
-    final info = wallet.phraseOf(account);
     final parts = <String>[
       if (address != null) truncateAddress(address),
-      if (account.isHdChild)
-        'from the first phrase · #${account.index}'
-      else if (info != null && !info.backupVerified)
-        'backup not verified',
+      if (account.isHdChild) 'from the first phrase · #${account.index}',
     ];
     return parts.isEmpty ? 'Locked' : parts.join(' · ');
   }

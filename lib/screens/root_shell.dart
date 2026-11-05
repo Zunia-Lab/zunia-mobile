@@ -7,13 +7,14 @@ import 'package:zunia_mobile/notifications/notifications.dart';
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/activity_screen.dart';
 import 'package:zunia_mobile/screens/address_book_screen.dart';
-import 'package:zunia_mobile/screens/bridge_screen.dart';
 import 'package:zunia_mobile/screens/connect_inbox.dart';
 import 'package:zunia_mobile/screens/governance_screen.dart';
+import 'package:zunia_mobile/screens/help_sheet.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/notifications_screen.dart';
 import 'package:zunia_mobile/screens/pair_device.dart';
+import 'package:zunia_mobile/screens/send_screen.dart';
 import 'package:zunia_mobile/screens/sessions_screen.dart';
 import 'package:zunia_mobile/screens/settings_screen.dart';
 import 'package:zunia_mobile/screens/tabs/browser_tab.dart';
@@ -136,7 +137,10 @@ class _RootShellState extends ConsumerState<RootShell> {
         endDrawer: _Drawer(
           onActivity: () => _fromDrawer(const ActivityScreen()),
           onNetworks: () => _fromDrawer(const NetworksScreen()),
-          onBridge: () => _fromDrawer(const BridgeScreen()),
+          // Bridge is an IBC transfer to another chain: Send's cross-chain
+          // mode, planned and checked by the interchain engine. No EVM or
+          // Solana rail is integrated, so none is offered.
+          onBridge: () => _fromDrawer(const SendScreen(initialCross: true)),
           onCollectibles: () => _fromDrawer(const NftCollectionScreen()),
           onMissions: () => _fromDrawer(const _MissionsPage()),
           onPair: () {
@@ -148,69 +152,7 @@ class _RootShellState extends ConsumerState<RootShell> {
           onSettings: () => _fromDrawer(const SettingsScreen()),
           onHelp: () {
             Navigator.of(context).pop();
-            showModalBottomSheet<void>(
-              context: context,
-              backgroundColor: Colors.transparent,
-              builder: (ctx) {
-                final sheet = ZuniaSemanticsExt.of(ctx);
-                return DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: sheet.sheetGradient,
-                    borderRadius:
-                        const BorderRadius.vertical(top: Radius.circular(30)),
-                    border: Border(top: BorderSide(color: sheet.lineStrong)),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
-                    child: SafeArea(
-                      top: false,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Center(
-                            child: Container(
-                              width: 44,
-                              height: 4,
-                              decoration: BoxDecoration(
-                                color: sheet.lineStrong,
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          Text(
-                            'Help',
-                            style: zuniaSans(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w500,
-                              color: sheet.fg,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            'Keys stay on this device. Signing uses the local '
-                            'zunia-core kernel. Live reads talk only to public '
-                            'chain endpoints listed in the registry.',
-                            style: zuniaSans(
-                              fontSize: 13,
-                              height: 1.55,
-                              color: sheet.fgMuted,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'LOCAL KEYS · APACHE 2.0',
-                            textAlign: TextAlign.center,
-                            style: zuniaMono(fontSize: 10, color: sheet.fgDim),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            );
+            unawaited(showHelpSheet(context));
           },
         ),
         bottomNavigationBar: ZuniaNavigationBar(

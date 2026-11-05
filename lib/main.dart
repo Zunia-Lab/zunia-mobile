@@ -125,11 +125,21 @@ class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver
         // size, which keeps the hierarchy and still honours accessibility.
         final media = MediaQuery.of(context);
         final user = media.textScaler.scale(16) / 16;
-        return MediaQuery(
-          data: media.copyWith(
-            textScaler: TextScaler.linear((user * kTextBoost).clamp(0.8, 2.2)),
+        // The status bar (clock, network, battery) and the navigation bar
+        // follow the app's theme, not the phone's: light icons over the dark
+        // theme, dark icons over the light one. Without this the shell kept
+        // whatever style was applied last (the splash follows the system
+        // appearance), so a dark app on a light phone drew dark icons on dark.
+        // A screen with its own bar or camera view still sets its own.
+        final overlay = systemBarsFor(Theme.of(context).brightness);
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: overlay,
+          child: MediaQuery(
+            data: media.copyWith(
+              textScaler: TextScaler.linear((user * kTextBoost).clamp(0.8, 2.2)),
+            ),
+            child: SecurityShell(child: child ?? const SizedBox.shrink()),
           ),
-          child: SecurityShell(child: child ?? const SizedBox.shrink()),
         );
       },
       home: const SplashGate(child: _AppGate()),
@@ -210,4 +220,24 @@ class KernelMissingScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The system bars' style over a screen drawn in [theme]: transparent bars,
+/// with icons that contrast with the app's background. `statusBarBrightness`
+/// is what iOS reads, `statusBarIconBrightness` what Android reads.
+///
+/// Built field by field: Flutter's `SystemUiOverlayStyle.dark` preset keeps
+/// light navigation-bar icons (it assumes a black bar), which vanish over the
+/// light theme's background.
+SystemUiOverlayStyle systemBarsFor(Brightness theme) {
+  final dark = theme == Brightness.dark;
+  final icons = dark ? Brightness.light : Brightness.dark;
+  return SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: icons,
+    statusBarBrightness: theme,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    systemNavigationBarIconBrightness: icons,
+  );
 }

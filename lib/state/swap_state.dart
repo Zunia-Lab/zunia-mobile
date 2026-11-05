@@ -809,7 +809,7 @@ SwapView buildSwapView({
           osmosis: osmosis,
           routes: env.routes,
         );
-  final to = pickTo(destinations, form.toKey);
+  final to = pickTo(destinations, form.toKey, fromChainId: from?.chainId);
 
   final path = from != null && to != null
       ? swapPathFor(

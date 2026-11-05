@@ -105,8 +105,7 @@ class _NftTransferScreenState extends ConsumerState<NftTransferScreen> {
         context,
         body: ZuniaEmptyState(
           title: 'No address on this chain',
-          description: 'This wallet has no address on ${widget.chainId}, so it '
-              'cannot sign a transfer there.',
+          description: 'Enable ${widget.chainId} to transfer from it.',
         ),
       );
     }
@@ -153,27 +152,26 @@ class _NftTransferScreenState extends ConsumerState<NftTransferScreen> {
       // the other chain. Sending to a well-formed address on the wrong chain
       // loses the token and the mistake is invisible on review.
       recipientError =
-          'Not an address on ${destChain!.chainName}: it must start with '
-          '"${expectedPrefix}1". A collectible sent to an address on the wrong '
-          'chain cannot be recovered.';
+          'Must be a ${destChain!.chainName} address starting with '
+          '"${expectedPrefix}1".';
     } else if (!widget.crossChain && recipient == source.address) {
-      recipientError = 'That is this wallet\'s own address on this chain.';
+      recipientError = 'That\'s your own address.';
     } else {
       recipientError = null;
     }
 
     final blocked = widget.crossChain && destinations.isEmpty
-        ? 'This build has no ICS721 channel out of ${source.chain.chainName}.'
+        ? 'No cross-chain route from ${source.chain.chainName}.'
         : route != null && !route.ready
             ? route.reason
             : recipient.isEmpty
-                ? 'Enter the address that should receive this collectible.'
+                ? 'Enter a recipient address.'
                 // Not the field's own message repeated: it is already on
                 // screen next to the input, and saying it twice reads as two
                 // separate problems.
                 : recipientError == null
                     ? null
-                    : 'Fix the recipient address above.';
+                    : 'Check the recipient address.';
 
     return _shell(
       context,
@@ -224,10 +222,8 @@ class _NftTransferScreenState extends ConsumerState<NftTransferScreen> {
             if (destinations.isEmpty)
               const ZuniaCallout(
                 tone: ZuniaCalloutTone.warning,
-                title: 'No ICS721 route configured',
-                body: 'ICS721 runs on its own port, so an ordinary IBC '
-                    'transfer channel cannot be reused for a collectible and '
-                    'Zunia will not substitute one.',
+                title: 'No cross-chain route',
+                body: 'This network has no ICS721 route configured.',
               )
             else
               ChainPicker(
@@ -248,8 +244,7 @@ class _NftTransferScreenState extends ConsumerState<NftTransferScreen> {
                   ZuniaFeeRow(
                     label: 'Bridge contract',
                     value: truncateAddress(route.bridgeContract!, left: 10),
-                    hint: 'takes custody of the collectible on '
-                        '${source.chain.chainName}',
+                    hint: 'holds the collectible',
                   ),
                   ZuniaFeeRow(label: 'Channel', value: route.channelId),
                 ],
@@ -277,19 +272,10 @@ class _NftTransferScreenState extends ConsumerState<NftTransferScreen> {
               onBook: () => _pickBook(expectedPrefix),
             ),
           ),
-          const SizedBox(height: 14),
-          ZuniaCallout(
-            tone: ZuniaCalloutTone.info,
-            title: widget.crossChain ? 'One signature, here' : 'One signature',
-            body: widget.crossChain
-                ? 'You sign a single contract call on '
-                    '${source.chain.chainName} and pay its fee in '
-                    '${source.chain.feeDenom}. The bridge does the rest inside '
-                    'packet processing.'
-                : 'You sign a single contract call on '
-                    '${source.chain.chainName} and pay its fee in '
-                    '${source.chain.feeDenom}. The transfer is final once it '
-                    'is included.',
+          const SizedBox(height: 12),
+          Text(
+            'One signature · fee in ${source.chain.feeDenom}',
+            style: zuniaMono(fontSize: 10.5, color: s.fgMuted),
           ),
         ],
       ),

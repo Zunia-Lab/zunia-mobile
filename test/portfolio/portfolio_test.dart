@@ -22,18 +22,22 @@ ChainBalance balance(
   String available = '0',
   String staked = '0',
   String rewards = '0',
+  String unbonding = '0',
   List<HeldToken> tokens = const [],
   bool stakingKnown = true,
   bool rewardsKnown = true,
+  bool unbondingKnown = true,
 }) =>
     ChainBalance(
       chainId: chainId,
       available: available,
       staked: staked,
       rewards: rewards,
+      unbonding: unbonding,
       tokens: tokens,
       stakingKnown: stakingKnown,
       rewardsKnown: rewardsKnown,
+      unbondingKnown: unbondingKnown,
     );
 
 const prices = <String, SpotPrice>{
@@ -173,6 +177,57 @@ void main() {
       final totals = computePortfolio(chains, balances, const {}, homeAssets(chains, balances, const {}));
       expect(totals.hasTotal, isFalse);
       expect(totals.change24h, isNull);
+    });
+  });
+
+  group('what is staked counts', () {
+    test("the coin's row is worth what is spendable, staked, unbonding and earned", () {
+      final chains = [chain('osmosis-1')];
+      final balances = {
+        'osmosis-1': balance(
+          'osmosis-1',
+          available: '1000000',
+          staked: '6000000',
+          unbonding: '2000000',
+          rewards: '1000000',
+        ),
+      };
+      final row = homeAssets(chains, balances, prices).single;
+      expect(row.amount, '1000000');
+      expect(row.staked, '8000000');
+      expect(row.rewards, '1000000');
+      expect(row.total, '10000000');
+      expect(row.hasPosition, isTrue);
+      // (1 + 6 + 2 + 1) OSMO × 0.5.
+      expect(row.fiatValue, 5);
+      final group = groupHomeAssets([row], ['osmosis-1']).single;
+      expect(group.fiatValue, 5);
+    });
+
+    test('a fully staked coin is held, and the total counts it once', () {
+      final chains = [chain('osmosis-1')];
+      final balances = {
+        'osmosis-1': balance('osmosis-1', available: '0', staked: '4000000', unbonding: '2000000', rewards: '2000000'),
+      };
+      final assets = homeAssets(chains, balances, prices);
+      expect(assets.single.held, isTrue);
+      final totals = computePortfolio(chains, balances, prices, assets);
+      // (0 + 4 + 2 + 2) × 0.5, not the position added a second time.
+      expect(totals.total, 4);
+      // The Staked segment: delegations only, and what can be claimed.
+      expect(totals.staked, 2);
+      expect(totals.claimable, 1);
+      expect(totals.pricedAssets, 1);
+    });
+
+    test('an unbonding amount the chain did not answer is left out, not guessed', () {
+      final chains = [chain('osmosis-1')];
+      final balances = {
+        'osmosis-1': balance('osmosis-1', available: '2000000', unbonding: '999000000', unbondingKnown: false),
+      };
+      final assets = homeAssets(chains, balances, prices);
+      expect(assets.single.total, '2000000');
+      expect(computePortfolio(chains, balances, prices, assets).total, 1);
     });
   });
 }

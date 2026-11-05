@@ -206,16 +206,14 @@ class SecurityScreen extends ConsumerWidget {
                     navigates: true,
                     onTap: () => _open(context, const RevealPhraseScreen()),
                   ),
+                  // An optional check of the written copy, open to every
+                  // phrase at any time. It is not a status: a restored wallet
+                  // was typed from that copy and is never called unverified.
                   ZuniaListTile(
-                    title: 'Backup',
+                    title: 'Check your written copy',
                     leading: Icons.task_alt_outlined,
-                    value: info == null
-                        ? null
-                        : info.backupVerified
-                            ? 'Verified'
-                            : 'Not verified',
-                    navigates: info != null && !info.backupVerified,
-                    onTap: info == null || info.backupVerified
+                    navigates: info != null,
+                    onTap: info == null
                         ? null
                         : () => _open(
                               context,

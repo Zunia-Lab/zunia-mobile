@@ -244,7 +244,7 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
                       leading: TokenAvatar(identity: sent, size: 40),
                       title: '$figure ${sent.ticker}',
                       line: tokenText(sent, TokenTextVariant.row),
-                      a11y: '${tokenText(sent, TokenTextVariant.a11y)}${sent.proven ? ', verified' : ''}',
+                      a11y: '${tokenText(sent, TokenTextVariant.a11y)}${sent.showsSeal ? ', verified' : ''}',
                     ),
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 10),

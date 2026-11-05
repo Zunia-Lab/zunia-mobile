@@ -82,7 +82,7 @@ String normalizeImportedPhrase(String text) {
   return tokens.join(' ');
 }
 
-enum _Step { safety, phrase, verify, password, name, networks, offerVerify, importVerify }
+enum _Step { safety, phrase, verify, password, name, networks }
 
 class WalletSetupFlow extends ConsumerStatefulWidget {
   const WalletSetupFlow({
@@ -126,7 +126,6 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
   bool _copied = false;
   bool _ackUnderstand = false;
   bool _ackBackup = false;
-  bool _verified = false;
   Timer? _autoHide;
 
   String _chainQuery = '';
@@ -269,9 +268,6 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
         _go(_create ? _Step.verify : _Step.phrase);
       case _Step.networks:
         _go(widget.adding ? _Step.name : _Step.password);
-      case _Step.offerVerify:
-      case _Step.importVerify:
-        _go(_Step.networks);
     }
   }
 
@@ -318,11 +314,7 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
       _setError('Select at least one network.');
       return;
     }
-    if (_create || _verified) {
-      _finish();
-    } else {
-      _go(_Step.offerVerify);
-    }
+    _finish();
   }
 
   /// Pinned chains first, so the home list opens on Safrochain.
@@ -342,7 +334,11 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
     final phrase =
         _create ? _mnemonic : WalletKernel.normalizePhrase(_imported);
     if (phrase == null || _busy) return;
-    final verified = _create || _verified;
+    // A created phrase passed the quiz; a restored one was just typed from
+    // the user's own copy, which is the backup. Neither is flagged, and a
+    // restore never asks for a check it does not need: the copy can still be
+    // checked any time from Security.
+    const verified = true;
     setState(() {
       _busy = true;
       _error = null;
@@ -503,25 +499,6 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
         return _passwordBody();
       case _Step.name:
         return _nameBody();
-      case _Step.offerVerify:
-        return _offerVerifyBody();
-      case _Step.importVerify:
-        return [
-          const ZuniaStepHeading(
-            title: 'Check your written copy',
-            subtitle: 'Pick the words Zunia asks for from the copy you keep '
-                'offline, not from memory.',
-          ),
-          const SizedBox(height: 22),
-          BackupQuiz(
-            words: WalletKernel.normalizePhrase(_imported).split(' '),
-            onPassed: () {
-              setState(() => _verified = true);
-              _finish();
-            },
-          ),
-          _errorBlock(),
-        ];
       case _Step.networks:
         return const [];
     }
@@ -811,18 +788,6 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
     ];
   }
 
-  List<Widget> _offerVerifyBody() {
-    return [
-      const ZuniaStepHeading(
-        title: 'Check your written copy?',
-        subtitle: 'A restored phrase starts as not verified. Zunia can ask for '
-            'a few words from the copy you keep offline, to make sure it is '
-            'complete. You can also do it later from Security.',
-      ),
-      _errorBlock(),
-    ];
-  }
-
   /// The chain list can run to hundreds of rows, so this step scrolls its own
   /// list under a fixed search and filter header rather than inside the page.
   Widget _networksBody() {
@@ -947,40 +912,18 @@ class _WalletSetupFlowState extends ConsumerState<WalletSetupFlow> {
           ),
         );
       case _Step.verify:
-      case _Step.importVerify:
         return const SizedBox.shrink();
       case _Step.password:
       case _Step.name:
         return _actions(primaryLabel: 'Continue', onPrimary: _passwordContinue);
       case _Step.networks:
-        final last = _create || _verified;
         return _actions(
-          primaryLabel: !last
-              ? 'Continue · ${_selectedChains.length}'
-              : widget.adding
-                  ? 'Add account · ${_selectedChains.length}'
-                  : 'Create wallet · ${_selectedChains.length}',
+          primaryLabel: widget.adding
+              ? 'Add account · ${_selectedChains.length}'
+              : _create
+                  ? 'Create wallet · ${_selectedChains.length}'
+                  : 'Restore wallet · ${_selectedChains.length}',
           onPrimary: _busy ? null : _networksContinue,
-        );
-      case _Step.offerVerify:
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ZuniaButton(
-              label: 'Verify now',
-              size: ZuniaButtonSize.lg,
-              onPressed: _busy ? null : () => _go(_Step.importVerify),
-            ),
-            const SizedBox(height: 8),
-            ZuniaButton(
-              label: 'Skip for now',
-              size: ZuniaButtonSize.lg,
-              variant: ZuniaButtonVariant.secondary,
-              loading: _busy,
-              onPressed: _busy ? null : _finish,
-            ),
-          ],
         );
     }
   }

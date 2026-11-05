@@ -17,7 +17,6 @@ import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/portfolio/portfolio.dart';
 import 'package:zunia_mobile/prices/fiat.dart';
 import 'package:zunia_mobile/prices/price_service.dart';
-import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/screens/asset_detail_screen.dart';
 import 'package:zunia_mobile/screens/chain_detail_screen.dart';
 import 'package:zunia_mobile/screens/native_request_sheets.dart';
@@ -26,7 +25,6 @@ import 'package:zunia_mobile/screens/nft_collection_screen.dart';
 import 'package:zunia_mobile/screens/qr_scanner_screen.dart';
 import 'package:zunia_mobile/screens/receive_screen.dart';
 import 'package:zunia_mobile/screens/send_screen.dart';
-import 'package:zunia_mobile/security/mnemonic_security_config.dart';
 import 'package:zunia_mobile/services/chain_client.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
@@ -207,7 +205,6 @@ class _HomeTabState extends ConsumerState<HomeTab> {
     final portfolio = ref.watch(portfolioProvider);
     final snapshot = ref.watch(pricesProvider).valueOrNull;
     ref.watch(identityGenerationProvider);
-    final verified = ref.watch(backupVerifiedProvider);
     final currency = normaliseCurrency(prefs.currency);
     final chains = [for (final account in accounts) account.chain];
     final balances = portfolio.balances;
@@ -221,17 +218,6 @@ class _HomeTabState extends ConsumerState<HomeTab> {
     final totals = computePortfolio(chains, balances, prices, assets);
 
     final slivers = <Widget>[
-      if (verified.valueOrNull == false && MnemonicSecurityConfig.persistentUnverifiedBanner)
-        const SliverPadding(
-          padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-          sliver: SliverToBoxAdapter(
-            child: ZuniaCallout(
-              tone: ZuniaCalloutTone.warning,
-              title: 'Backup not verified',
-              body: 'Confirm your recovery phrase before you fund this wallet.',
-            ),
-          ),
-        ),
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         sliver: SliverToBoxAdapter(
@@ -1018,17 +1004,23 @@ class _AssetRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = ZuniaSemanticsExt.of(context);
     final identity = asset.identity;
+    // The coin's row shows everything the account holds of it, staked,
+    // unbonding and earned included, and says how much of that is staked.
     final amount = asset.amountKnown
-        ? formatTokenAmount(asset.amount, asset.scale, TokenAmountVariant.list, hidden: hidden)
+        ? formatTokenAmount(asset.total, asset.scale, TokenAmountVariant.list, hidden: hidden)
         : '—';
     final parts = splitBaseUnits(amount);
     final fiat = asset.fiatValue == null ? null : formatFiatCompact(asset.fiatValue!, currency);
     final change = asset.change24h;
     final subtitle = grouped ? groupedSubtitle(identity) : asset.subtitle;
+    final stakeNote = asset.amountKnown && asset.hasPosition && !hidden
+        ? 'incl. ${formatTokenAmount(asset.locked, asset.scale, TokenAmountVariant.list)} staked'
+        : null;
     final label = [
       tokenText(identity, TokenTextVariant.a11y),
-      if (identity.proven) 'verified',
+      if (identity.showsSeal) 'verified',
       if (hidden) 'amount hidden' else if (!asset.amountKnown) 'balance not read' else amount,
+      ?stakeNote,
       if (!hidden && fiat != null) fiat,
     ].join(', ');
     return Semantics(
@@ -1064,6 +1056,15 @@ class _AssetRow extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: zuniaSans(fontSize: 12, height: 1.25, color: s.fgMuted),
+                      ),
+                    ],
+                    if (stakeNote != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        stakeNote,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: zuniaSans(fontSize: 12, height: 1.25, color: s.fgDim),
                       ),
                     ],
                   ],

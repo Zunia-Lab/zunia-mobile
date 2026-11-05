@@ -475,7 +475,22 @@ void main() {
           ).disabledReason,
           testnetReason,
         );
-        // SAF is not traded on Osmosis: the pools cannot reach it.
+        // POKT is not traded on Osmosis: the pools cannot reach it.
+        expect(
+          gateOption(
+            from,
+            side('pocket', 'upokt'),
+            table,
+            book,
+          ).disabledReason,
+          notTradedReason('POKT'),
+        );
+        // SAF trades in pool 3600 before Osmosis verifies it: named by the
+        // voucher Osmosis lists, and never refused as "not traded".
+        expect(
+          osmosisDenomFor(side('safrochain-1', 'usaf')),
+          'ibc/DBAA4846F611A7603EFCE6F9F46F4F561D48B1F492A576022F000614A17089CE',
+        );
         expect(
           gateOption(
             from,
@@ -483,7 +498,16 @@ void main() {
             table,
             book,
           ).disabledReason,
-          notTradedReason('SAF'),
+          isNull,
+        );
+        expect(
+          gateOption(
+            side('safrochain-1', 'usaf'),
+            side('osmosis-1', usdcInj),
+            table,
+            book,
+          ).disabledReason,
+          isNull,
         );
         // A pair the contract lacks is not refused: the pools swap it.
         expect(

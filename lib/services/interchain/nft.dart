@@ -93,9 +93,7 @@ const String ics721VoucherWarning =
 /// it already knows about. Saying this in the UI is better than showing an
 /// empty list that looks authoritative.
 const String nftDiscoveryLimitation =
-    'CosmWasm has no chain-wide index of NFTs by owner. This list only covers '
-    'contracts Zunia knows about; add a collection address to check another '
-    'one.';
+    'Only known collections are checked. Add a missing one by address.';
 
 /* -------------------------------------------------------------------------- *
  * Small guards

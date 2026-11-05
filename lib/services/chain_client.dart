@@ -150,6 +150,8 @@ class ChainBalance {
     this.tokens = const [],
     this.stakingKnown = true,
     this.rewardsKnown = true,
+    this.unbonding = '0',
+    this.unbondingKnown = false,
   });
 
   final String chainId;
@@ -175,6 +177,14 @@ class ChainBalance {
   /// False when the rewards endpoint failed: [rewards] is not a fact.
   final bool rewardsKnown;
 
+  /// Base units of the staking coin on its way back from validators: still
+  /// the account's, still worth its price, spendable once the period ends.
+  final String unbonding;
+
+  /// False when the unbonding endpoint failed or was not read: [unbonding] is
+  /// then left out of every total rather than counted as zero.
+  final bool unbondingKnown;
+
   ChainBalance withTokens(List<HeldToken> next) => ChainBalance(
         chainId: chainId,
         available: available,
@@ -184,6 +194,8 @@ class ChainBalance {
         tokens: next,
         stakingKnown: stakingKnown,
         rewardsKnown: rewardsKnown,
+        unbonding: unbonding,
+        unbondingKnown: unbondingKnown,
       );
 }
 
@@ -495,6 +507,7 @@ class ChainClient {
     final legs = await Future.wait([
       _readJson('$rest/cosmos/staking/v1beta1/delegations/$address'),
       _readJson('$rest/cosmos/distribution/v1beta1/delegators/$address/rewards'),
+      _readJson('$rest/cosmos/staking/v1beta1/delegators/$address/unbonding_delegations'),
     ]);
     final bank = await bankFuture;
     final bankFailure = bank.failure;
@@ -570,12 +583,37 @@ class ChainClient {
       }
     }
 
+    // Unbonding is the staking coin by definition (the chain's bond denom),
+    // so every entry counts. A failed read is unknown, never a zero.
+    var unbonding = BigInt.zero;
+    var unbondingKnown = true;
+    final unbondingFailure = legs[2].failure;
+    if (unbondingFailure != null) {
+      unbondingKnown = _absentRoute(unbondingFailure);
+    } else {
+      final responses = legs[2].json?['unbonding_responses'];
+      if (responses is List) {
+        for (final response in responses) {
+          final entries = response is Map ? response['entries'] : null;
+          if (entries is! List) continue;
+          for (final entry in entries) {
+            final amount = entry is Map ? _amountOf(entry['balance']) : null;
+            if (amount != null) unbonding += amount;
+          }
+        }
+      } else if (responses != null) {
+        unbondingKnown = false;
+      }
+    }
+
     return BalanceLoaded(
       ChainBalance(
         chainId: chain.chainId,
         available: available.toString(),
         staked: staked.toString(),
         rewards: rewards.toString(),
+        unbonding: unbonding.toString(),
+        unbondingKnown: unbondingKnown,
         otherDenoms: List.unmodifiable(otherDenoms),
         tokens: List.unmodifiable([
           for (final MapEntry(:key, :value) in held.entries)

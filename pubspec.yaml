@@ -69,6 +69,7 @@ flutter:
     - assets/chains/catalog.json
     - assets/data/
     - assets/browser/
+    - assets/browser/icons/
     - config/mnemonic_security.yaml
     - config/connect.yaml
   fonts:

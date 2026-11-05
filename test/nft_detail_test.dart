@@ -155,11 +155,11 @@ void main() {
     expect(find.byType(Image), findsNothing);
     expect(find.text(kZuniaNftMediaLoadLabel.toUpperCase()), findsOneWidget);
     await tester.scrollUntilVisible(
-      find.text('No artwork shown'),
+      find.text('Artwork is off.'),
       160,
       scrollable: find.byType(Scrollable).first,
     );
-    expect(find.text('No artwork shown'), findsOneWidget);
+    expect(find.text('Artwork is off.'), findsOneWidget);
     // Still no image after scrolling the whole screen into view.
     expect(find.byType(Image), findsNothing);
   });
@@ -168,13 +168,18 @@ void main() {
       (tester) async {
     await pump(tester, prefs: const {'zunia.prefs.liveReads': true});
     await tester.scrollUntilVisible(
-      find.textContaining('no explorer configured'),
+      find.text('COLLECTION ADDRESS'),
       160,
       scrollable: find.byType(Scrollable).first,
     );
 
-    expect(find.textContaining('no explorer configured'), findsOneWidget);
+    expect(find.textContaining('explorer'), findsNothing);
     expect(find.text('COLLECTION ADDRESS'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('TOKEN ID'),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('TOKEN ID'), findsOneWidget);
   });
 
@@ -193,7 +198,7 @@ void main() {
 
     expect(_enabled(tester, 'Transfer here'), isFalse);
     expect(_enabled(tester, 'Send cross-chain'), isFalse);
-    expect(find.textContaining('held by another address'), findsOneWidget);
+    expect(find.textContaining('Held by another address'), findsOneWidget);
   });
 
   testWidgets('cross-chain is off in a build with no ICS721 route, and says why',
@@ -208,7 +213,7 @@ void main() {
     // The same-chain path works; only the cross-chain one is unconfigured.
     expect(_enabled(tester, 'Transfer here'), isTrue);
     expect(_enabled(tester, 'Send cross-chain'), isFalse);
-    expect(find.textContaining('no ICS721 bridge or channel'), findsOneWidget);
+    expect(find.textContaining('No cross-chain route'), findsOneWidget);
   });
 
   testWidgets('renders at 320dp and in landscape without overflowing',
@@ -288,7 +293,7 @@ void main() {
           mediaEnabled: true,
           hasIpfsGateway: false,
         ),
-        contains('no IPFS gateway configured'),
+        contains('IPFS'),
       );
       expect(
         nftMediaBlockedReason(

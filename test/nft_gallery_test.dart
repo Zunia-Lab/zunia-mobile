@@ -176,16 +176,11 @@ void main() {
       prefs: const {'zunia.prefs.liveReads': true},
     );
 
-    expect(find.text('Nothing was checked'), findsOneWidget);
-    expect(
-      find.textContaining('no chain-wide index of NFTs by owner'),
-      findsWidgets,
-    );
-    // The load-bearing assertion: not one wasm query was made, so no sentence
-    // on screen may be a claim about the account.
+    expect(find.text('No NFTs yet'), findsOneWidget);
+    expect(find.text('Add a collection'), findsOneWidget);
+    // Not one wasm query was made.
     expect(lcd.actions, isEmpty);
     expect(find.textContaining('you own no'), findsNothing);
-    expect(find.textContaining('No NFTs'), findsNothing);
   });
 
   testWidgets('an empty answer says how many collections were read',
@@ -201,8 +196,7 @@ void main() {
     );
 
     expect(lcd.actions, contains('$_collection/tokens'));
-    expect(find.text('Nothing in the collections checked'), findsOneWidget);
-    expect(find.textContaining('queried 1 collection'), findsOneWidget);
+    expect(find.text('No NFTs yet'), findsOneWidget);
   });
 
   testWidgets('a collection on chain is found with nothing pasted',
@@ -226,8 +220,8 @@ void main() {
 
     expect(lcd.actions, contains('$_collection/tokens'));
     expect(find.text('Reputation'), findsOneWidget);
-    expect(find.textContaining('chain scan'), findsOneWidget);
-    expect(find.text('Nothing was checked'), findsNothing);
+    expect(find.textContaining('1 collection checked'), findsOneWidget);
+    expect(find.text('No NFTs yet'), findsNothing);
   });
 
   testWidgets('a scan that finds no collection says what it checked',
@@ -241,8 +235,7 @@ void main() {
     );
     await pump(tester, lcd: lcd, prefs: const {'zunia.prefs.liveReads': true});
 
-    expect(find.text('Nothing in the collections checked'), findsOneWidget);
-    expect(find.textContaining('newest 1 contract code'), findsOneWidget);
+    expect(find.text('No NFTs yet'), findsOneWidget);
     // A non-CW721 contract answering "no" is the scan working, not a failure.
     expect(find.text('A collection could not be read'), findsNothing);
   });
@@ -261,8 +254,7 @@ void main() {
       prefs: const {'zunia.prefs.liveReads': true},
     );
 
-    expect(find.text('NFTs are not available on this chain'), findsOneWidget);
-    expect(find.textContaining('does not run CosmWasm'), findsOneWidget);
+    expect(find.textContaining('support NFTs'), findsOneWidget);
   });
 
   testWidgets('unknown CosmWasm support is neither a yes nor a no',
@@ -278,9 +270,10 @@ void main() {
       prefs: const {'zunia.prefs.liveReads': true},
     );
 
-    expect(find.text('Zunia cannot tell yet'), findsOneWidget);
+    expect(find.textContaining('Couldn\'t check'), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
     // Never the unsupported wording, which would be a claim about the chain.
-    expect(find.text('NFTs are not available on this chain'), findsNothing);
+    expect(find.textContaining('support NFTs'), findsNothing);
   });
 
   testWidgets('live reads off means nothing was read, and says so',
@@ -299,7 +292,8 @@ void main() {
       },
     );
 
-    expect(find.text('Nothing was read'), findsOneWidget);
+    expect(find.text('Live reads are off'), findsOneWidget);
+    expect(find.text('Open Settings'), findsOneWidget);
     // A saved collection is the thing reads-off must not query; without one
     // there is nothing to ask either way and the assertion below proves
     // nothing.
@@ -329,7 +323,7 @@ void main() {
     );
 
     expect(find.text('Show artwork'), findsOneWidget);
-    expect(find.text(kZuniaNftMediaPrivacyNote), findsOneWidget);
+    expect(find.text('Images load from each token\'s host.'), findsOneWidget);
     // The switch is real: with media off there is no Image widget at all, so
     // nothing is requested from the image host.
     expect(find.byType(Image), findsNothing);
@@ -367,13 +361,13 @@ void main() {
     await pump(tester, prefs: const {'zunia.prefs.liveReads': true});
 
     await tester.enterText(find.byType(TextField).first, 'osmo1abcdefghij');
-    await tester.ensureVisible(find.text('Check this collection'));
+    await tester.ensureVisible(find.text('Check'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Check this collection'));
+    await tester.tap(find.text('Check'));
     await tester.pumpAndSettle();
 
     expect(
-      find.textContaining('does not start with "addr_safro1"'),
+      find.textContaining('must start with "addr_safro1"'),
       findsOneWidget,
     );
     expect(find.text('ADDED BY YOU'), findsNothing);

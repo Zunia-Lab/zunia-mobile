@@ -492,14 +492,11 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
       add(
         ZuniaCallout(
           tone: ZuniaCalloutTone.info,
-          title: 'Two steps, both on Osmosis',
+          title: 'Two steps',
           body:
-              "Osmosis's swap contract has no route from ${from.ticker} to ${to.ticker}, "
-              "and Osmosis's own pools swap only tokens already on Osmosis.\n"
-              '1. Move your ${from.ticker} from ${from.chainName} to your Osmosis address with Send: '
-              'an IBC transfer, with no Zunia fee.\n'
-              '2. Come back here: Swap opens on your ${from.ticker} on Osmosis and swaps it in one '
-              'transaction${quote == null ? '' : ', for about ${swapTickerAmount(quote.outputAmount, to.identity)} at today\'s price'}.',
+              '1. Move your ${from.ticker} to your Osmosis address (IBC, no Zunia fee).\n'
+              '2. Swap it there in one transaction'
+              '${quote == null ? '' : ', for about ${swapTickerAmount(quote.outputAmount, to.identity)} today'}.',
         ),
       );
     }

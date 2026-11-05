@@ -56,25 +56,13 @@ void main() {
       await _pump(tester, const BrowserTab(), platform: platform, size: const Size(390, 844));
       expect(tester.takeException(), isNull);
       expect(find.text('Browser'), findsOneWidget);
-      expect(find.text('FEATURED'), findsOneWidget);
-      await tester.scrollUntilVisible(find.text('Mintscan'), 200, scrollable: find.byType(Scrollable).first);
-      expect(find.text('Mintscan'), findsOneWidget);
-
-      // A category narrows the list; the search box opens an address.
-      final chip = find.widgetWithText(ChoiceChip, 'NFT');
-      // Back to the top, then along the category row to the chip.
-      await tester.fling(find.byType(Scrollable).first, const Offset(0, 2000), 3000);
-      await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(
-        chip,
-        120,
-        scrollable: find.ancestor(of: chip, matching: find.byType(Scrollable)).first,
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(chip);
-      await tester.pumpAndSettle();
-      expect(find.text('Stargaze'), findsOneWidget);
-      expect(find.text('Osmosis'), findsNothing);
+      expect(find.text('FEATURED'), findsNothing);
+      expect(find.byType(ChoiceChip), findsNothing);
+      for (final name in ['Safrochain Hub', 'Osmosis', 'Mintscan', 'Zunia IBC Map']) {
+        expect(find.text(name), findsOneWidget);
+      }
+      expect(find.text('Favorites'), findsNothing);
+      expect(find.text('Recent'), findsNothing);
       await tester.enterText(find.byType(TextField), 'example.org');
       await tester.pumpAndSettle();
       expect(find.text('https://example.org'), findsOneWidget);

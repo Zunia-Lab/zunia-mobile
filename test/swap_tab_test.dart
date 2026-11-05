@@ -193,11 +193,11 @@ void main() {
       );
       expect(find.widgetWithText(ZuniaButton, 'Review swap'), findsNothing);
       await tester.scrollUntilVisible(
-        find.text('Two steps, both on Osmosis'),
+        find.text('Two steps'),
         120,
         scrollable: find.byType(Scrollable).first,
       );
-      expect(find.text('Two steps, both on Osmosis'), findsOneWidget);
+      expect(find.text('Two steps'), findsOneWidget);
     },
   );
 

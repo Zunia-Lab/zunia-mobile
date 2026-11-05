@@ -58,6 +58,7 @@ class TokenTableRow {
     required this.sourceNetwork,
     required this.alloyed,
     required this.verified,
+    this.listedByZunia = false,
     required this.stable,
     required this.decimals,
     required this.logoUrl,
@@ -99,6 +100,12 @@ class TokenTableRow {
 
   /// Osmosis lists the row as verified (every hub-chain row counts as verified).
   final bool verified;
+
+  /// Osmosis lists the row without having verified it yet, and the row is the
+  /// staking coin of a mainnet in Zunia's own registry (Safrochain's SAF, traded
+  /// in pool 3600 while its review was pending). Hash-proven like every row;
+  /// Swap offers it as it offers a verified one.
+  final bool listedByZunia;
 
   /// Not flagged unstable or disabled by Osmosis.
   final bool stable;
@@ -369,6 +376,7 @@ TokenRegistry _decode(Map<String, dynamic> tokens, Map<String, dynamic> channels
       sourceNetwork: sourceNetworks.contains(network) ? network : null,
       alloyed: alloyed,
       verified: (flags & 2) != 0,
+      listedByZunia: (flags & 8) != 0,
       stable: (flags & 4) != 0,
       decimals: t[12] as int,
       logoUrl: logoIndex >= 0 && logoIndex < logos.length

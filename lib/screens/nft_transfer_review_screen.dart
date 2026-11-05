@@ -141,8 +141,7 @@ class _NftTransferReviewScreenState
       if (!_sameIntent(inspection, recheck)) {
         setState(() {
           _signing = false;
-          _error = 'The message changed between review and signing, so nothing '
-              'was signed. Go back and start again.';
+          _error = 'The message changed, so nothing was signed. Start again.';
         });
         return;
       }
@@ -227,8 +226,7 @@ class _NftTransferReviewScreenState
         context,
         body: ZuniaEmptyState(
           title: 'This chain is not available',
-          description: 'Zunia has no usable entry or address for '
-              '${widget.chainId}, so it cannot build a transfer there.',
+          description: 'No address for ${widget.chainId}.',
         ),
       );
     }
@@ -237,9 +235,9 @@ class _NftTransferReviewScreenState
     // execute would be built against a guess.
     final supportBlock = support.when(
       data: (value) => value.usable ? null : value.reason,
-      loading: () => 'Checking whether ${chainInfo.chainName} runs CosmWasm…',
+      loading: () => 'Checking ${chainInfo.chainName}…',
       error: (error, _) =>
-          'Could not establish whether ${chainInfo.chainName} runs CosmWasm.',
+          'Couldn\'t check ${chainInfo.chainName}.',
     );
 
     final built = supportBlock != null
@@ -293,13 +291,11 @@ class _NftTransferReviewScreenState
 
     final blocked = supportBlock ??
         built.error ??
-        (locked ? 'Unlock the wallet to sign this transfer.' : null) ??
+        (locked ? 'Unlock the wallet to sign.' : null) ??
         (unreadable
-            ? 'Zunia could not decode the message it would sign, so it will '
-                'not sign it.'
+            ? 'This message can\'t be decoded, so it won\'t be signed.'
             : mismatched
-                ? 'The decoded message is not the transfer this screen '
-                    'described, so nothing will be signed.'
+                ? 'The message doesn\'t match this transfer.'
                 : null);
 
     return _shell(
@@ -319,8 +315,7 @@ class _NftTransferReviewScreenState
             body: inspection?.summary ??
                 built.error ??
                 supportBlock ??
-                'The contract call could not be built, so nothing here can say '
-                    'what it would do.',
+                'The contract call could not be built.',
           ),
           for (final warning in inspection?.warnings ?? const <String>[]) ...[
             const SizedBox(height: 8),
@@ -371,8 +366,7 @@ class _NftTransferReviewScreenState
               ZuniaFeeRow(
                 label: 'Network fee',
                 value: feeLabel,
-                hint: 'paid on ${chainInfo.chainName} only, at a gas limit of '
-                    '$kNftTransferGasLimit',
+                hint: 'gas limit $kNftTransferGasLimit',
                 emphasise: true,
               ),
             ],
@@ -532,10 +526,8 @@ class NftBridgeSentScreen extends StatelessWidget {
               ZuniaCallout(
                 tone: ZuniaCalloutTone.info,
                 title: 'Broadcast on $sourceChainName',
-                body: 'The node accepted the transaction. Token '
-                    '${inspection.tokenId ?? ''} was handed to the bridge '
-                    'contract, which holds it while the voucher exists on '
-                    '$destChainName.',
+                body: 'Token ${inspection.tokenId ?? ''} is held by the bridge '
+                    'while its voucher exists on $destChainName.',
               ),
               const SizedBox(height: 14),
               const ZuniaSectionLabel('Transaction'),
@@ -545,31 +537,19 @@ class NftBridgeSentScreen extends StatelessWidget {
                 style: zuniaMono(fontSize: 11, height: 1.5, color: s.fg),
               ),
               const SizedBox(height: 6),
-              Text(
-                // Same rule as the packet status screen: no explorer is
-                // configured, and a made-up domain is worse than no link.
-                'Zunia has no explorer configured for these chains, so the '
-                'hash is here to copy rather than to open.',
-                style: zuniaSans(fontSize: 12, height: 1.5, color: s.fgMuted),
-              ),
               const SizedBox(height: 18),
-              const ZuniaCallout(
+              ZuniaCallout(
                 tone: ZuniaCalloutTone.warning,
-                title: 'Zunia is not watching this packet',
-                body: 'The wallet can follow ordinary IBC token transfers hop '
-                    'by hop, but an ICS721 packet moves on the bridge '
-                    'contract\'s own port with a different payload, and Zunia '
-                    'has no reader for it yet. Check the destination chain for '
-                    'the voucher rather than waiting here.',
+                title: 'Not tracked here',
+                body: 'Check $destChainName for the voucher.',
               ),
               const SizedBox(height: 14),
               ZuniaCallout(
                 tone: ZuniaCalloutTone.info,
                 title: 'Getting it back',
-                body: 'Sending the voucher on $destChainName back over the '
-                    'same channel burns it and releases the original from '
-                    '${truncateAddress(bridgeContract, left: 10)} on '
-                    '$sourceChainName.',
+                body: 'Send the voucher back over the same channel to release '
+                    'the original from '
+                    '${truncateAddress(bridgeContract, left: 10)}.',
               ),
             ],
           ),

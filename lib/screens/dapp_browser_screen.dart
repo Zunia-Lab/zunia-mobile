@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:zunia_mobile/browser/approval_queue.dart';
+import 'package:zunia_mobile/browser/browser_favicon.dart';
 import 'package:zunia_mobile/browser/dapp_browser_store.dart';
 import 'package:zunia_mobile/browser/dapp_provider_bridge.dart';
 import 'package:zunia_mobile/browser/known_recipients.dart';
@@ -527,9 +528,11 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       if (!_urlFocus.hasFocus) _urlController.text = next;
     });
     await _refreshNav();
+    _iconUrl = await _pickFavicon(controller);
     await DappBrowserStore.instance.touchRecent(
       url: next,
       title: _pageTitle.isEmpty ? (Uri.tryParse(next)?.host ?? next) : _pageTitle,
+      iconUrl: _iconUrl,
     );
     await _refreshBookmark();
     // A page whose document-start script did not run (an old Android WebView)
@@ -566,10 +569,33 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     }
   }
 
+  /// The page's own favicon URL: https, not SVG, apple-touch-icon first, then
+  /// the largest.
+  String? _iconUrl;
+
+  Future<String?> _pickFavicon(InAppWebViewController controller) async {
+    try {
+      final icons = (await controller.getFavicons()).where((f) {
+        final u = f.url.toString();
+        return u.startsWith('https://') && !u.toLowerCase().endsWith('.svg');
+      }).toList();
+      if (icons.isEmpty) return null;
+      int score(Favicon f) =>
+          ((f.rel ?? '').contains('apple-touch-icon') ? 100000 : 0) +
+          (f.url.toString().toLowerCase().endsWith('.png') ? 10000 : 0) +
+          (f.width ?? 0);
+      icons.sort((a, b) => score(b).compareTo(score(a)));
+      return icons.first.url.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _toggleBookmark() async {
     final saved = await DappBrowserStore.instance.toggleBookmark(
       url: _currentUrl,
       title: _pageTitle.isEmpty ? _host : _pageTitle,
+      iconUrl: _iconUrl,
     );
     unawaited(ZuniaHaptics.light());
     if (!mounted) return;
@@ -1288,10 +1314,7 @@ class _BookmarksSheetState extends State<_BookmarksSheet> {
                     },
                     child: ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        _tab == 'bookmarks' ? Icons.bookmark_outline_rounded : Icons.history_rounded,
-                        color: s.fgMuted,
-                      ),
+                      leading: BrowserFavicon(host: row.host, iconUrl: row.iconUrl, size: 34),
                       title: Text(row.title, maxLines: 1, overflow: TextOverflow.ellipsis,
                           style: zuniaSans(fontSize: 14, color: s.fg)),
                       subtitle: Text(row.host, maxLines: 1, overflow: TextOverflow.ellipsis,

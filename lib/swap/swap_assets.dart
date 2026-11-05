@@ -343,15 +343,51 @@ List<SwapAsset> buyOptions(
 
 /// The To on screen. A row the user picked stays picked, even once the From
 /// or the route table turns it off: its reason is then shown and nothing is
-/// planned for it. With no pick, the first row that can be used.
-SwapAsset? pickTo(List<SwapAsset> destinations, String? toKey) {
+/// planned for it. With no pick, the first row a single transaction is known
+/// to reach: a swap in Osmosis's pools when the funds are there, or a pair the
+/// contract's table holds.
+///
+/// Otherwise (SAF on Safrochain: the table has no SAF route, so every pair
+/// moves the tokens to Osmosis first) the second step is a swap in Osmosis's
+/// pools, so a row delivered on Osmosis needs nothing after it, and USDC is
+/// what a sale is most often for (pool 3600 pairs SAF with it). A row the
+/// table cannot answer for, such as a held voucher nothing identifies (an IBC
+/// USDC on Safrochain), is never the default: it was, and it would need the
+/// output sent on through a third chain.
+SwapAsset? pickTo(
+  List<SwapAsset> destinations,
+  String? toKey, {
+  String? fromChainId,
+}) {
   if (toKey != null) {
     for (final asset in destinations) {
       if (asset.key == toKey) return asset;
     }
   }
-  for (final asset in destinations) {
-    if (asset.disabledReason == null) return asset;
+  final usable = [
+    for (final asset in destinations)
+      if (asset.disabledReason == null) asset,
+  ];
+  if (usable.isEmpty) return null;
+  if (fromChainId == null) return usable.first;
+  for (final asset in usable) {
+    final path = swapPathFor(
+      fromChainId,
+      asset.chainId,
+      asset.executable,
+      venueChainId: kOsmosisChainId,
+    );
+    if (isPoolPath(path)) return asset;
+    if (path == SwapPath.contract && asset.executable == Executable.yes) {
+      return asset;
+    }
   }
-  return null;
+  final onVenue = [
+    for (final asset in usable)
+      if (asset.chainId == kOsmosisChainId) asset,
+  ];
+  for (final asset in onVenue) {
+    if (asset.identity.family == 'USDC') return asset;
+  }
+  return onVenue.isNotEmpty ? onVenue.first : usable.first;
 }

@@ -76,6 +76,7 @@ class TokenIdentity {
     required this.proven,
     required this.listed,
     required this.testnet,
+    this.unverifiedOnOsmosis = false,
   });
 
   /// `heldOnChainId:denom`.
@@ -127,7 +128,7 @@ class TokenIdentity {
   final TokenProvenance provenance;
 
   /// Origin and name both come from the registry, the table or a verified
-  /// channel walk. The only reason a seal or a "verified" line may be shown.
+  /// channel walk. A seal or a "verified" line needs it: see [showsSeal].
   final bool proven;
 
   /// Something names the token. False for a voucher nothing traces and for a
@@ -137,12 +138,25 @@ class TokenIdentity {
   /// Held on a testnet or a chain the user added.
   final bool testnet;
 
+  /// Osmosis lists the asset but has not verified it (SAF while
+  /// osmosis-labs/assetlists#3876 is open): its row on osmosis-1 is
+  /// `listedByZunia`. Named, priced, listed and swapped like any proven token;
+  /// only the seal and the word "verified" stay off, since that word is
+  /// Osmosis's to give. Regenerating the table once Osmosis verifies the asset
+  /// turns it off.
+  final bool unverifiedOnOsmosis;
+
+  /// Draw the seal and say "verified": a proven identity Osmosis has not
+  /// withheld its verification from.
+  bool get showsSeal => proven && !unverifiedOnOsmosis;
+
   TokenIdentity copyWith({
     String? key,
     String? denom,
     int? decimals,
     bool? decimalsKnown,
     bool? proven,
+    bool? unverifiedOnOsmosis,
   }) =>
       TokenIdentity(
         key: key ?? this.key,
@@ -172,6 +186,7 @@ class TokenIdentity {
         proven: proven ?? this.proven,
         listed: listed,
         testnet: testnet,
+        unverifiedOnOsmosis: unverifiedOnOsmosis ?? this.unverifiedOnOsmosis,
       );
 }
 
@@ -1418,6 +1433,12 @@ TokenIdentity _finalize(_Draft draft) {
   }
   final originChainId = draft.originChainId;
   final originDenom = draft.originDenom;
+  final osmosisDenom = draft.heldOnChainId == osmosisChainId
+      ? draft.denom
+      : originChainId != null && originDenom != null
+          ? osmosisDenomOf(originChainId, originDenom)
+          : null;
+  final osmosisListing = osmosisDenom == null ? null : _tableRow(osmosisChainId, osmosisDenom);
   return TokenIdentity(
     key: '${draft.heldOnChainId}:${draft.denom}',
     heldOnChainId: draft.heldOnChainId,
@@ -1440,11 +1461,7 @@ TokenIdentity _finalize(_Draft draft) {
     coinGeckoId: draft.coinGeckoId,
     variantGroup: draft.variantGroup,
     alloyed: draft.alloyed,
-    osmosisDenom: draft.heldOnChainId == osmosisChainId
-        ? draft.denom
-        : originChainId != null && originDenom != null
-            ? osmosisDenomOf(originChainId, originDenom)
-            : null,
+    osmosisDenom: osmosisDenom,
     aliases: aliasSet.toList(),
     provenance: draft.provenance,
     // A chain the user typed in is not evidence, so nothing on it is proven.
@@ -1455,6 +1472,7 @@ TokenIdentity _finalize(_Draft draft) {
         (draft.provenance != TokenProvenance.channelWalk || draft.walkCanonical == true),
     listed: draft.named,
     testnet: testnet,
+    unverifiedOnOsmosis: osmosisListing != null && !osmosisListing.verified,
   );
 }
 
