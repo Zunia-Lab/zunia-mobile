@@ -460,6 +460,38 @@ void main() {
       expect(row.counterpartyChannelId, 'channel-122');
     });
 
+    test('checks a preview route before any amount: verified once the chains confirm it', () async {
+      final path = planner.directReach('injective-1', ['osmosis-1'])['osmosis-1']!;
+      expect(path.links.single.channelId, 'channel-8');
+      // Unchecked: the preview has nothing to go on yet, so the screen draws
+      // it as checking, not as unverified.
+      expect(planner.pathChecked(path), isFalse);
+      expect(planner.pathHopViews(path.links).single.channelVerified, isFalse);
+      await planner.checkPath(path);
+      expect(planner.pathChecked(path), isTrue);
+      final checked = planner.directReach('injective-1', ['osmosis-1'])['osmosis-1']!;
+      expect(planner.pathHopViews(checked.links).single.channelVerified, isTrue);
+      // The plan made once an amount is typed reuses the answer: still open.
+      expect(planner.pathChecked(checked), isTrue);
+    });
+
+    test('a preview check that fails leaves the channel not verified', () async {
+      // channel-109 on Osmosis rides the expired light client 07-tendermint-1617.
+      const link = ChannelLink(
+        sourceChainId: 'osmosis-1',
+        destChainId: 'injective-1',
+        channelId: 'channel-109',
+        port: 'transfer',
+        counterpartyChannelId: 'channel-5',
+        source: ChannelLinkSource.seed,
+        state: IbcChannelState.unknown,
+      );
+      const path = RoutePath(chainIds: ['osmosis-1', 'injective-1'], links: [link]);
+      await planner.checkPath(path);
+      expect(planner.pathChecked(path), isTrue);
+      expect(planner.pathHopViews(path.links).single.channelVerified, isFalse);
+    });
+
     test('drops a channel this session found expired, and falls back to the rest', () async {
       cacheExpiredPair();
       status['07-tendermint-19'] = 'Expired';
