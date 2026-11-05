@@ -40,9 +40,12 @@ jobs:
         working-directory: zunia-core
         run: cargo build -p zunia-ffi --release
 
+      # Pinned to the Flutter the release builds use, so a newer stable's
+      # deprecations do not fail analyze before the app moves to it.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.41.7
           cache: true
       - name: Analyze and test
         working-directory: zunia-mobile
