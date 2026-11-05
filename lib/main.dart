@@ -87,7 +87,8 @@ class _ZuniaAppState extends ConsumerState<ZuniaApp> with WidgetsBindingObserver
   }
 
   Future<void> _bootstrap() async {
-    await PushMessaging.init();
+    // Firebase for push: never prompts or creates a token by itself.
+    unawaited(PushMessaging.init());
     await ref.read(nativeConnectProvider).restore();
     _deepLinks = ref.read(deepLinkHandlerProvider);
     await _deepLinks!.start();

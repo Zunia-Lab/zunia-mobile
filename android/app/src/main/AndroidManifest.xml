@@ -101,6 +101,19 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Push (FCM) sent while the app is closed lands on this channel,
+             created at startup by lib/notifications/device_alerts.dart. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="zunia_activity" />
+        <!-- No Firebase token until the user turns notifications on
+             (FirebasePushTokens enables it then), and no analytics. -->
+        <meta-data
+            android:name="firebase_messaging_auto_init_enabled"
+            android:value="false" />
+        <meta-data
+            android:name="firebase_analytics_collection_enabled"
+            android:value="false" />
     </application>
     <queries>
         <intent>

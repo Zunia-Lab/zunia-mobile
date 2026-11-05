@@ -67,6 +67,20 @@ const String kConnectWsPublicUrl = String.fromEnvironment('CONNECT_WS_PUBLIC_URL
 const String kExtraTrustedRelays =
     String.fromEnvironment('ZUNIA_CONNECT_TRUSTED_RELAYS');
 
+/// Zunia's backend over HTTP(S): the Connect relay's host, which also takes
+/// push registrations (`/v1/devices/...`). `wss://api.zunialab.com` gives
+/// `https://api.zunialab.com`; a development relay set with
+/// CONNECT_WS_PUBLIC_URL gives its own host.
+Uri zuniaBackendBase() {
+  final custom = kConnectWsPublicUrl.trim();
+  final relay = Uri.parse(custom.isNotEmpty ? custom : kDefaultConnectRelay);
+  return Uri(
+    scheme: relay.scheme == 'ws' ? 'http' : 'https',
+    host: relay.host,
+    port: relay.hasPort ? relay.port : null,
+  );
+}
+
 /// Relays the wallet pairs through. A relay tells the wallet which site
 /// created a session, so an untrusted relay could lie about it: codes that
 /// name any other relay are refused.

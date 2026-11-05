@@ -68,7 +68,10 @@ class AppPreferences {
   ///
   /// The in-app feed and its unread count work without this; it only decides
   /// whether the system is asked to show them too, and the system still needs
-  /// the user's permission. The extension's equivalent is `browserAlerts`.
+  /// the user's permission. With transfers shown and live reads on, it also
+  /// registers this device with Zunia's push server
+  /// (lib/notifications/push_registration.dart). The extension's equivalent
+  /// is `browserAlerts`.
   final bool alerts;
 
   /// Fetch NFT artwork and off-chain metadata from whatever host a token points

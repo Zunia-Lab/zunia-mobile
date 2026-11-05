@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zunia_mobile/crypto/keystore.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
+import 'package:zunia_mobile/notifications/notifications.dart' show pushRegistrarProvider;
 import 'package:zunia_mobile/providers.dart';
 import 'package:zunia_mobile/security/biometric_vault.dart';
 import 'package:zunia_mobile/security/clipboard_guard.dart';
@@ -258,6 +259,9 @@ class VaultSession {
   /// first; without (forgotten password), the caller made the user confirm.
   Future<void> removeWallet({String? password}) async {
     if (password != null) await _keystore.verifyPassword(password);
+    // Off Zunia's push server first: its record of this device goes with the
+    // wallet's preferences below.
+    await _ref.read(pushRegistrarProvider).forget();
     try {
       await _ref.read(nativeConnectProvider).disconnectAll();
     } catch (e) {

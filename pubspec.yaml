@@ -1,7 +1,7 @@
 name: zunia_mobile
 description: Zunia multi-chain Cosmos wallet for iOS and Android
 publish_to: "none"
-version: 0.1.0+4
+version: 0.1.0+5
 
 environment:
   sdk: ^3.11.5
@@ -42,14 +42,12 @@ dependencies:
   flutter_inappwebview: ^6.1.5
   cryptography: ^2.9.0
   # Device notifications for the notice feed (transfers, rewards, votes),
-  # raised by the app itself while it runs; no push server involved.
+  # raised by the app itself while it runs.
   flutter_local_notifications: ^19.5.0
-
-  # Push notifications (Firebase Cloud Messaging):
-  # Uncomment when a Firebase project is linked and google-services / GoogleService-Info
-  # are present. Until then, use lib/services/push_messaging.dart stub.
-  # firebase_core: ^3.0.0
-  # firebase_messaging: ^15.0.0
+  # Push (Firebase Cloud Messaging, project zunia-72ab8): a wake-up when the
+  # app is closed. Registration: lib/notifications/push_registration.dart.
+  firebase_core: ^5.1.0
+  firebase_messaging: ^17.0.1
 
 dev_dependencies:
   flutter_test:
