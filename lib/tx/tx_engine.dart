@@ -20,6 +20,7 @@ import 'dart:math' as math;
 import 'package:crypto/crypto.dart';
 import 'package:zunia_core/zunia_core.dart';
 
+import 'package:zunia_mobile/tx/gas_fee.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/security/signing_gate.dart';
@@ -157,6 +158,7 @@ class TxEngine {
         sequence: at,
         publicKeyHex: derived.publicKeyHex,
         ethKeyType: chain.usesEthKeySign,
+        ethPubKeyTypeUrl: chain.ethKeyTypeUrl,
       );
       return _simulate(chain, base64Encode(bytesOfHex(simulateHex)));
     }
@@ -189,6 +191,7 @@ class TxEngine {
       sequence: sequence,
       publicKeyHex: derived.publicKeyHex,
       ethKeyType: chain.usesEthKeySign,
+      ethPubKeyTypeUrl: chain.ethKeyTypeUrl,
       mode: ZuniaSignMode.direct,
     );
     return TxQuote(
@@ -229,6 +232,7 @@ class TxEngine {
       sequence: quote.sequence,
       publicKeyHex: quote.publicKeyHex,
       ethKeyType: quote.chain.usesEthKeySign,
+      ethPubKeyTypeUrl: quote.chain.ethKeyTypeUrl,
       mode: ZuniaSignMode.direct,
     );
     return TxQuote(
@@ -284,6 +288,7 @@ class TxEngine {
       sequence: quote.sequence,
       publicKeyHex: quote.publicKeyHex,
       ethKeyType: quote.chain.usesEthKeySign,
+      ethPubKeyTypeUrl: quote.chain.ethKeyTypeUrl,
       mode: ZuniaSignMode.direct,
     );
     final shown = quote.preview.signBytesHash.toLowerCase().replaceFirst('0x', '');
@@ -385,24 +390,13 @@ class TxEngine {
     final price = step?[speed.name] ?? step?['average'] ?? 0.025;
     final denom =
         chain.feeMinimalDenom.isEmpty ? chain.coinMinimalDenom : chain.feeMinimalDenom;
-    final amount = ceilMul(gasLimit, price);
+    final amount = gasFee(BigInt.from(gasLimit), price);
     return ZuniaFee(
       amount: amount == BigInt.zero
           ? const []
           : [ZuniaCoin(denom: denom, amount: amount.toString())],
       gasLimit: gasLimit,
     );
-  }
-
-  /// `ceil(gas × price)` without losing an 18-decimal chain's precision: the
-  /// price is scaled to an integer before multiplying.
-  static BigInt ceilMul(int gas, double price) {
-    if (price <= 0 || !price.isFinite) return BigInt.zero;
-    const scale = 1000000000000; // 1e12
-    final scaled = BigInt.from((price * scale).round());
-    final product = BigInt.from(gas) * scaled;
-    final whole = product ~/ BigInt.from(scale);
-    return product % BigInt.from(scale) == BigInt.zero ? whole : whole + BigInt.one;
   }
 
   Future<int> _simulate(ChainEntry chain, String txBytesBase64) async {

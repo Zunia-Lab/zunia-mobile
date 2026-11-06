@@ -13,6 +13,7 @@ import 'dart:typed_data';
 
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/crypto/proto_writer.dart';
+import 'package:zunia_mobile/tx/gas_fee.dart';
 
 enum FeeTier {
   low('Low', 'Cheapest. A busy network can refuse it.'),
@@ -81,17 +82,8 @@ class FeeChoice {
   String amountFor(FeeTier? tier) => tier == null ? site : tiers[tier]!;
 }
 
-/// Catalog gas prices are doubles; twelve decimals is finer than any of them.
-const _priceScale = 12;
-
 /// `gas × price`, rounded up, in exact integer arithmetic.
-String _priced(BigInt gas, double price) {
-  if (!price.isFinite || price <= 0) return '0';
-  final parts = price.toStringAsFixed(_priceScale).split('.');
-  final scaled = BigInt.parse(parts[0] + (parts.length > 1 ? parts[1] : '').padRight(_priceScale, '0'));
-  final unit = BigInt.from(10).pow(_priceScale);
-  return ((gas * scaled + unit - BigInt.one) ~/ unit).toString();
-}
+String _priced(BigInt gas, double price) => gasFee(gas, price).toString();
 
 final _digits = RegExp(r'^\d+$');
 

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:zunia_mobile/connect/cosmos_signing.dart';
 import 'package:zunia_mobile/crypto/proto_writer.dart';
+import 'package:zunia_mobile/tx/gas_fee.dart';
 
 const signModeLegacyAminoJson = 127;
 
@@ -177,7 +178,8 @@ StdFee estimateFee({
   required double gasPrice,
   required String denom,
 }) {
-  final amount = (gasLimit * gasPrice).ceil().clamp(1, 1 << 62);
+  final exact = gasFee(BigInt.from(gasLimit), gasPrice);
+  final amount = exact < BigInt.one ? BigInt.one : exact;
   return StdFee(
     amount: [(denom: denom, amount: amount.toString())],
     gas: gasLimit.toString(),
