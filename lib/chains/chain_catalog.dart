@@ -2,6 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show rootBundle;
 
+/// `ethsecp256k1` type URLs other than Ethermint's; see [ChainEntry.ethKeyTypeUrl].
+const injectivePubKeyTypeUrl = '/injective.crypto.v1beta1.ethsecp256k1.PubKey';
+const cosmosEvmPubKeyTypeUrl = '/cosmos.evm.crypto.v1.ethsecp256k1.PubKey';
+const initiaPubKeyTypeUrl = '/initia.crypto.v1beta1.ethsecp256k1.PubKey';
+
 /// One registry row. Generated into `assets/chains/catalog.json` by
 /// `zunia-extension/scripts/generate-chain-catalog.mjs`, so the extension and
 /// the app always agree on chain ids, prefixes and endpoints.
@@ -119,8 +124,27 @@ class ChainEntry {
   final List<ChainCurrency> currencies;
 
   /// Protobuf type URL of an `ethsecp256k1` key when it is not Ethermint's,
-  /// e.g. Injective's.
+  /// as the catalog states it (Injective's). Read [ethKeyTypeUrl] to sign.
   final String? ethPubKeyTypeUrl;
+
+  /// The `ethsecp256k1` type URL this chain's nodes decode, when it is not
+  /// Ethermint's; null means Ethermint's (or a plain Cosmos key).
+  ///
+  /// The catalog's explicit [ethPubKeyTypeUrl] first, then Injective by chain
+  /// id, then Keplr's flags: `eth-secp256k1-cosmos` for cosmos/evm chains
+  /// (KiiChain, NVNM, turkchain) and `eth-secp256k1-initia` for Initia. The
+  /// kernel's `ChainInfo::eth_pub_key_type_url` and the dashboard's
+  /// `pubKeyTypeUrlFor` apply the same rule. The simulation, the preview and
+  /// the signature must all carry this one: a node refuses to decode a
+  /// transaction whose key type it does not register.
+  String? get ethKeyTypeUrl {
+    final explicit = ethPubKeyTypeUrl?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    if (chainId.startsWith('injective')) return injectivePubKeyTypeUrl;
+    if (features?.contains('eth-secp256k1-cosmos') ?? false) return cosmosEvmPubKeyTypeUrl;
+    if (features?.contains('eth-secp256k1-initia') ?? false) return initiaPubKeyTypeUrl;
+    return null;
+  }
 
   /// CoinGecko id of the native coin, when it has one.
   final String? coinGeckoId;
@@ -166,7 +190,7 @@ class ChainEntry {
       ],
       'feeCurrencies': [fee],
       'features': features ?? const <String>[],
-      if (ethPubKeyTypeUrl != null) 'ethPubKeyTypeUrl': ethPubKeyTypeUrl,
+      if (ethKeyTypeUrl != null) 'ethPubKeyTypeUrl': ethKeyTypeUrl,
       'bech32Prefix': bech32Prefix,
       'coinType': coinType,
     });
