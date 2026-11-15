@@ -1,11 +1,13 @@
 /// Optional spot prices.
 ///
-/// Mirrors `zunia-extension/lib/prices.ts` (0.1.5): a chain is priced from
-/// CoinGecko through its catalog `coinGeckoId`; a chain with none is priced
-/// from the one exchange market `assets/data/prices.json` names for it (SAF on
-/// Coinstore's SAF/USDT), and that price carries its source so every surface
-/// can say where it comes from. Coinstore quotes in USDT, converted to the
-/// user's currency with CoinGecko's Tether price.
+/// Mirrors `zunia-extension/lib/prices.ts`: a chain is priced from CoinGecko
+/// through its catalog `coinGeckoId`; a chain with none is priced from the one
+/// on-chain pool `assets/data/prices.json` names for it (SAF in Osmosis pool
+/// 3600, against USDC), read from Osmosis itself, and that price carries its
+/// source so every surface can say where it comes from. No exchange is asked
+/// for anything: the price is the pool's spot price, the 24 h change compares
+/// it with the pool's TWAP over the hour a day ago, and USDC is converted to
+/// the user's currency with CoinGecko's USDC price.
 ///
 /// One difference, for 300 enabled chains: the extension asks CoinGecko's
 /// per-coin route one coin at a time (its batch route answers a browser
@@ -25,6 +27,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:zunia_mobile/chains/chain_catalog.dart';
 
 /// Currencies the wallet prices in. The first is the fallback.
 const List<String> supportedCurrencies = ['usd', 'eur', 'gbp', 'jpy', 'chf'];
@@ -34,37 +37,51 @@ String normaliseCurrency(String value) {
   return supportedCurrencies.contains(lower) ? lower : 'usd';
 }
 
-/// The exchange market a chain is priced from when it has no CoinGecko id.
+/// The on-chain pool a chain is priced from when it has no CoinGecko id.
 @immutable
-class ExchangePriceSource {
-  const ExchangePriceSource({
-    required this.exchange,
+class PoolPriceSource {
+  const PoolPriceSource({
+    required this.chainId,
+    required this.poolId,
+    required this.baseDenom,
+    required this.quoteDenom,
+    required this.quoteGeckoId,
     required this.name,
-    required this.market,
     required this.pair,
     required this.url,
   });
 
-  factory ExchangePriceSource.fromJson(Map<String, dynamic> json) => ExchangePriceSource(
-        exchange: json['exchange'] as String? ?? '',
+  factory PoolPriceSource.fromJson(Map<String, dynamic> json) => PoolPriceSource(
+        chainId: json['chainId'] as String? ?? '',
+        poolId: json['poolId'] as String? ?? '',
+        baseDenom: json['baseDenom'] as String? ?? '',
+        quoteDenom: json['quoteDenom'] as String? ?? '',
+        quoteGeckoId: json['quoteGeckoId'] as String? ?? '',
         name: json['name'] as String? ?? '',
-        market: json['market'] as String? ?? '',
         pair: json['pair'] as String? ?? '',
         url: json['url'] as String? ?? '',
       );
 
-  final String exchange;
+  /// The chain the pool lives on (osmosis-1); its catalog LCD answers.
+  final String chainId;
+  final String poolId;
 
-  /// Shown beside the price: "via Coinstore".
+  /// The priced coin and what it is counted in, as the pool holds them.
+  final String baseDenom;
+  final String quoteDenom;
+
+  /// CoinGecko id of the quote asset, to convert into the user's currency.
+  final String quoteGeckoId;
+
+  /// Shown beside the price: "via Osmosis".
   final String name;
-  final String market;
   final String pair;
 
-  /// The market's public page, linked from the price.
+  /// The pool's public page, linked from the price.
   final String url;
 }
 
-/// Where a price came from when it is one exchange market, not an aggregate.
+/// Where a price came from when it is one on-chain pool, not an aggregate.
 @immutable
 class PriceSource {
   const PriceSource({required this.name, required this.pair, required this.url});
@@ -129,19 +146,15 @@ class PriceHttpException implements Exception {
 /// What one chain is priced from.
 @immutable
 class PriceTarget {
-  const PriceTarget({required this.chainId, this.coinGeckoId, this.exchange});
+  const PriceTarget({required this.chainId, this.coinGeckoId, this.pool});
 
   final String chainId;
   final String? coinGeckoId;
-  final ExchangePriceSource? exchange;
+  final PoolPriceSource? pool;
 }
 
 const String _coinEndpoint = 'https://api.coingecko.com/api/v3/coins/';
 const String _simpleEndpoint = 'https://api.coingecko.com/api/v3/simple/price';
-const String _coinstoreKlineEndpoint = 'https://api.coinstore.com/api/v1/market/kline/';
-
-/// CoinGecko's id for USDT, the quote currency of the exchange markets.
-const String tetherId = 'tether';
 
 /// A few at a time: the free per-coin route rejects a burst with 429.
 const int _perCoinConcurrency = 4;
@@ -151,30 +164,16 @@ const int _batchSize = 100;
 const Duration priceCacheTtl = Duration(seconds: 120);
 const Duration _requestTimeout = Duration(seconds: 8);
 
-/// Last price and 24 h change from Coinstore's hourly candles, in the market's
-/// quote currency: the newest close, against the open of the oldest of the
-/// last 24 bars. Null for anything it cannot read whole.
-({double price, double change24h})? parseCoinstoreKlines(Object? body) {
-  if (body is! Map) return null;
-  final data = body['data'];
-  final items = data is Map ? data['item'] : null;
-  if (items is! List || items.isEmpty) return null;
-  final bars = <({double start, double open, double close})>[];
-  for (final raw in items) {
-    if (raw is! Map) return null;
-    final start = _number(raw['startTime']);
-    final open = _number(raw['open']);
-    final close = _number(raw['close']);
-    if (start == null || open == null || close == null || !(open > 0) || !(close > 0)) {
-      return null;
-    }
-    bars.add((start: start, open: open, close: close));
-  }
-  bars.sort((a, b) => a.start.compareTo(b.start));
-  final window = bars.length > 24 ? bars.sublist(bars.length - 24) : bars;
-  final first = window.first;
-  final last = window.last;
-  return (price: last.close, change24h: ((last.close - first.open) / first.open) * 100);
+/// The pool's price and 24 h change, in its quote asset: the spot price
+/// (`/osmosis/poolmanager/v2/pools/{id}/prices`) against the arithmetic TWAP
+/// over the hour that ended a day ago. Null for a spot price it cannot read;
+/// without a TWAP the change stays 0 rather than an invented one.
+({double price, double change24h})? parsePoolQuote(Object? spot, Object? twap) {
+  final price = spot is Map ? _number(spot['spot_price']) : null;
+  if (price == null || !(price > 0)) return null;
+  final before = twap is Map ? _number(twap['arithmetic_twap']) : null;
+  final change = before != null && before > 0 ? (price - before) / before * 100 : 0.0;
+  return (price: price, change24h: change);
 }
 
 double? _number(Object? value) {
@@ -219,12 +218,22 @@ Map<String, ({double price, double change24h})> parseSimplePrices(
 }
 
 class PriceService {
-  PriceService({PriceHttp? http, DateTime Function()? now})
-      : _http = http ?? _defaultHttp,
-        _now = now ?? DateTime.now;
+  PriceService({
+    PriceHttp? http,
+    DateTime Function()? now,
+    String? Function(String chainId)? restOf,
+  })  : _http = http ?? _defaultHttp,
+        _now = now ?? DateTime.now,
+        _restOf = restOf ?? _catalogRest;
 
   final PriceHttp _http;
   final DateTime Function() _now;
+
+  /// The LCD that answers for a pool's chain.
+  final String? Function(String chainId) _restOf;
+
+  static String? _catalogRest(String chainId) =>
+      ChainCatalog.isLoaded ? ChainCatalog.instance.find(chainId)?.rest : null;
 
   /// Per currency: chain id → (price, when it was read).
   final Map<String, Map<String, (SpotPrice, DateTime)>> _cache = {};
@@ -305,19 +314,20 @@ class PriceService {
     String currency,
   ) async {
     final geckoByChain = <String, String>{};
-    final exchangeByChain = <String, ExchangePriceSource>{};
+    final poolByChain = <String, PoolPriceSource>{};
     for (final target in targets) {
       final id = target.coinGeckoId;
       if (id != null && id.isNotEmpty) {
         geckoByChain[target.chainId] = id;
-      } else if (target.exchange != null) {
-        exchangeByChain[target.chainId] = target.exchange!;
+      } else if (target.pool != null) {
+        poolByChain[target.chainId] = target.pool!;
       }
     }
-    // Tether too when an exchange market needs converting from USDT.
+    // The pools' quote assets too (USDC), to convert into the user's currency.
     final ids = <String>{
       ...geckoByChain.values,
-      if (exchangeByChain.isNotEmpty) tetherId,
+      for (final pool in poolByChain.values)
+        if (pool.quoteGeckoId.isNotEmpty) pool.quoteGeckoId,
     }.toList()
       ..sort();
     String? problem;
@@ -327,10 +337,10 @@ class PriceService {
       quotes.addAll(read.quotes);
       problem = read.problem;
     }
-    final markets = await _pool(
-      exchangeByChain.entries.toList(),
+    final pools = await _pool(
+      poolByChain.entries.toList(),
       _perCoinConcurrency,
-      (entry) async => (chainId: entry.key, source: entry.value, quote: await _exchangeQuote(entry.value)),
+      (entry) async => (chainId: entry.key, source: entry.value, quote: await _poolQuote(entry.value)),
     );
 
     final prices = <String, SpotPrice>{};
@@ -339,19 +349,20 @@ class PriceService {
       if (quote == null) continue;
       prices[chainId] = SpotPrice(price: quote.price, change24h: quote.change24h);
     }
-    // USDT in the user's currency; without a Tether quote only USD can assume par.
-    final usdt = quotes[tetherId]?.price ?? (currency == 'usd' ? 1.0 : null);
-    for (final market in markets) {
-      final quote = market.quote;
-      if (quote == null || usdt == null) continue;
-      prices[market.chainId] = SpotPrice(
-        price: quote.price * usdt,
+    for (final pool in pools) {
+      final quote = pool.quote;
+      // The quote asset in the user's currency; without its quote only USD
+      // can assume par.
+      final unit = quotes[pool.source.quoteGeckoId]?.price ?? (currency == 'usd' ? 1.0 : null);
+      if (quote == null || unit == null) continue;
+      prices[pool.chainId] = SpotPrice(
+        price: quote.price * unit,
         change24h: quote.change24h,
-        source: PriceSource(name: market.source.name, pair: market.source.pair, url: market.source.url),
+        source: PriceSource(name: pool.source.name, pair: pool.source.pair, url: pool.source.url),
       );
     }
-    if (exchangeByChain.isNotEmpty && markets.any((m) => m.quote == null)) {
-      problem ??= 'An exchange market did not answer.';
+    if (poolByChain.isNotEmpty && pools.any((p) => p.quote == null)) {
+      problem ??= 'A pool price could not be read.';
     }
     return (prices: prices, problem: problem);
   }
@@ -410,12 +421,37 @@ class PriceService {
     return (quotes: quotes, problem: problem);
   }
 
-  Future<({double price, double change24h})?> _exchangeQuote(ExchangePriceSource source) async {
-    if (source.exchange != 'coinstore') return null;
+  Future<({double price, double change24h})?> _poolQuote(PoolPriceSource source) async {
+    final rest = _restOf(source.chainId)?.trim().replaceAll(RegExp(r'/+$'), '');
+    if (rest == null || rest.isEmpty || source.poolId.isEmpty) return null;
+    String stamp(DateTime at) => '${at.toUtc().toIso8601String().split('.').first}Z';
+    final now = _now();
     try {
-      final uri = Uri.parse('$_coinstoreKlineEndpoint${Uri.encodeComponent(source.market)}')
-          .replace(queryParameters: {'period': '60min', 'size': '24'});
-      return parseCoinstoreKlines(await _http(uri));
+      final spot = await _http(
+        Uri.parse('$rest/osmosis/poolmanager/v2/pools/${source.poolId}/prices').replace(
+          queryParameters: {
+            'base_asset_denom': source.baseDenom,
+            'quote_asset_denom': source.quoteDenom,
+          },
+        ),
+      );
+      Object? twap;
+      try {
+        twap = await _http(
+          Uri.parse('$rest/osmosis/twap/v1beta1/ArithmeticTwap').replace(
+            queryParameters: {
+              'pool_id': source.poolId,
+              'base_asset': source.baseDenom,
+              'quote_asset': source.quoteDenom,
+              'start_time': stamp(now.subtract(const Duration(hours: 25))),
+              'end_time': stamp(now.subtract(const Duration(hours: 24))),
+            },
+          ),
+        );
+      } on Object {
+        twap = null;
+      }
+      return parsePoolQuote(spot, twap);
     } on Object {
       return null;
     }
@@ -461,37 +497,35 @@ class PriceService {
 }
 
 /* -------------------------------------------------------------------------- *
- * Bundled exchange sources
+ * Bundled pool sources
  * -------------------------------------------------------------------------- */
 
-Map<String, ExchangePriceSource>? _exchangeSources;
+Map<String, PoolPriceSource>? _poolSources;
 
 /// `assets/data/prices.json`, decoded once.
-Future<Map<String, ExchangePriceSource>> loadExchangeSources() async {
-  final cached = _exchangeSources;
+Future<Map<String, PoolPriceSource>> loadPoolSources() async {
+  final cached = _poolSources;
   if (cached != null) return cached;
   try {
     final raw = await rootBundle.loadString('assets/data/prices.json');
-    return _exchangeSources = decodeExchangeSources(raw);
+    return _poolSources = decodePoolSources(raw);
   } on Object {
-    return _exchangeSources = const {};
+    return _poolSources = const {};
   }
 }
 
-/// The sources already loaded, or empty before [loadExchangeSources].
-Map<String, ExchangePriceSource> get exchangeSources => _exchangeSources ?? const {};
+/// The sources already loaded, or empty before [loadPoolSources].
+Map<String, PoolPriceSource> get poolSources => _poolSources ?? const {};
 
-Map<String, ExchangePriceSource> decodeExchangeSources(String raw) {
+Map<String, PoolPriceSource> decodePoolSources(String raw) {
   final json = jsonDecode(raw);
-  final sources = json is Map ? json['exchangeSources'] : null;
+  final sources = json is Map ? json['poolSources'] : null;
   if (sources is! Map) return const {};
   return {
     for (final MapEntry(:key, :value) in sources.entries)
-      if (key is String && value is Map<String, dynamic>)
-        key: ExchangePriceSource.fromJson(value),
+      if (key is String && value is Map<String, dynamic>) key: PoolPriceSource.fromJson(value),
   };
 }
 
 @visibleForTesting
-void debugSetExchangeSources(Map<String, ExchangePriceSource> sources) =>
-    _exchangeSources = sources;
+void debugSetPoolSources(Map<String, PoolPriceSource> sources) => _poolSources = sources;
