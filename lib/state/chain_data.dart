@@ -453,15 +453,15 @@ final pricesProvider = FutureProvider<PriceSnapshot>((ref) async {
   if (!live || key.isEmpty || !ChainCatalog.isLoaded) {
     return PriceSnapshot(currency: currency, prices: const {});
   }
-  final sources = await loadExchangeSources();
+  final sources = await loadPoolSources();
   final targets = <PriceTarget>[];
   for (final chainId in key.split(',')) {
     final entry = ChainCatalog.instance.find(chainId);
     if (entry == null) continue;
     final gecko = entry.coinGeckoId;
-    final exchange = gecko == null ? sources[chainId] : null;
-    if (gecko == null && exchange == null) continue;
-    targets.add(PriceTarget(chainId: chainId, coinGeckoId: gecko, exchange: exchange));
+    final pool = gecko == null ? sources[chainId] : null;
+    if (gecko == null && pool == null) continue;
+    targets.add(PriceTarget(chainId: chainId, coinGeckoId: gecko, pool: pool));
   }
   if (targets.isEmpty) return PriceSnapshot(currency: currency, prices: const {});
   // Read again when the prices age out, as long as something is listening.
@@ -470,7 +470,7 @@ final pricesProvider = FutureProvider<PriceSnapshot>((ref) async {
   return ref.watch(priceServiceProvider).prices(targets, currency);
 });
 
-/// The chains priced from one exchange market, not an aggregate (SAF).
+/// The chains priced from one on-chain pool, not an aggregate (SAF on Osmosis).
 Set<String> exchangePricedChains(PriceSnapshot snapshot) => {
       for (final MapEntry(:key, :value) in snapshot.prices.entries)
         if (value.source != null) key,

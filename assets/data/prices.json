@@ -1,1 +1,1 @@
-{"exchangeSources":{"safrochain-1":{"exchange":"coinstore","name":"Coinstore","market":"SAFUSDT","pair":"SAF/USDT","url":"https://www.coinstore.com/spot/SAFUSDT"}}}
+{"poolSources":{"safrochain-1":{"chainId":"osmosis-1","poolId":"3600","baseDenom":"ibc/DBAA4846F611A7603EFCE6F9F46F4F561D48B1F492A576022F000614A17089CE","quoteDenom":"factory/osmo147h5x9pcj7lm0cttlaefx6sqq5vdfnmwfcqxkmjd7exqm9gc7grqhr75m0/alloyed/allUSDC","quoteGeckoId":"usd-coin","name":"Osmosis","pair":"SAF/USDC","url":"https://app.osmosis.zone/pool/3600"}}}

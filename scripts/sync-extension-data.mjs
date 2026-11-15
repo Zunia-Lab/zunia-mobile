@@ -65,7 +65,7 @@ const files = {
     explorerTxUrls: interchain.EXPLORER_TX_URLS,
   },
   "prices.json": {
-    exchangeSources: prices.EXCHANGE_PRICE_SOURCES,
+    poolSources: prices.POOL_PRICE_SOURCES,
   },
 };
 
