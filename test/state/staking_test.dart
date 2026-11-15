@@ -120,6 +120,34 @@ void main() {
       expect(claimMsgBatches(delegator: 'd', positions: [position('v', '0')]), isEmpty);
     });
 
+    test('one claim plan for every Claim button', () {
+      final rows = [
+        position('v1', '10'),
+        position('v2', '0'),
+        position('v3', null),
+        position('v4', '500'),
+        for (var i = 0; i < 25; i++) position('w$i', '${i + 1}'),
+      ];
+      final plan = claimPlan(delegator: 'cosmos1d', positions: rows);
+      // The message list and the validators the review names are the same.
+      expect(plan.msgs.length, maxClaimsPerTx);
+      expect(plan.included.length, maxClaimsPerTx);
+      expect(
+        plan.msgs.map((m) => m.value['validator_address']),
+        plan.included.map((p) => p.validatorAddress),
+      );
+      expect(plan.included.first.validatorAddress, 'v4');
+      expect(plan.total, plan.included.fold<BigInt>(BigInt.zero, (sum, p) => sum + p.rewards!));
+      // 27 have something to claim; 20 now, 7 for the next claim.
+      expect(plan.remaining, 7);
+      expect(plan.msgs.map((m) => m.value['validator_address']), isNot(contains('v2')));
+      expect(plan.msgs.map((m) => m.value['validator_address']), isNot(contains('v3')));
+      // Nothing to claim, or a reward that is unknown: no transaction at all.
+      expect(claimPlan(delegator: 'd', positions: [position('v', '0')]).isEmpty, isTrue);
+      expect(claimPlan(delegator: 'd', positions: [position('v', null)]).isEmpty, isTrue);
+      expect(claimPlan(delegator: 'd', positions: const []).isEmpty, isTrue);
+    });
+
     test('a claimable total is unknown when any reward is unknown', () {
       expect(claimableTotal([position('a', '5'), position('b', '7')]), BigInt.from(12));
       expect(claimableTotal([position('a', '5'), position('b', null)]), isNull);

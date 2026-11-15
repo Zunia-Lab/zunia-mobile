@@ -9,12 +9,11 @@ import 'package:zunia_mobile/screens/delegate_screen.dart';
 import 'package:zunia_mobile/screens/tabs/earn_tab.dart';
 import 'package:zunia_mobile/services/chain_reader.dart';
 import 'package:zunia_mobile/services/staking_client.dart';
-import 'package:zunia_mobile/state/chain_data.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/staking.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/ui/facts.dart';
-import 'package:zunia_mobile/ui/tx_flow.dart';
+import 'package:zunia_mobile/ui/claim_review.dart';
 import 'package:zunia_mobile/util/amounts.dart';
 import 'package:zunia_mobile/widgets/validator_avatar.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -41,37 +40,14 @@ class ValidatorDetailScreen extends ConsumerWidget {
     ChainEntry chain,
     String delegator,
     StakingPosition position,
-    String moniker,
-  ) async {
-    final rewards = position.rewards ?? BigInt.zero;
-    final sameDenom = chain.feeMinimalDenom.isEmpty ||
-        chain.feeMinimalDenom == chain.coinMinimalDenom;
-    await showTxReview(
-      context,
-      TxIntent(
-        title: 'Claim rewards',
-        action: 'Sign claim',
+  ) =>
+      reviewClaim(
+        context,
+        ref,
         chain: chain,
-        signer: delegator,
-        msgs: claimMsgBatches(delegator: delegator, positions: [position]).first,
-        headlineLabel: 'You claim',
-        headline: '≈ ${stakeAmount(rewards, chain, digits: 6)}',
-        headlineLine: 'From $moniker · ${chain.chainName}',
-        gainBaseUnits: sameDenom ? rewards : null,
-        offerNotifications: true,
-        result: const TxResultCopy(
-          sending: 'Claiming rewards',
-          done: 'Rewards claimed',
-          failed: 'Claim failed',
-          doneMessage: 'The rewards are in your available balance.',
-        ),
-        onSettled: () {
-          refreshStaking(ref, chain.chainId);
-          ref.invalidate(balancesProvider);
-        },
-      ),
-    );
-  }
+        delegator: delegator,
+        positions: [position],
+      );
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -210,7 +186,6 @@ class ValidatorDetailScreen extends ConsumerWidget {
                       chain,
                       delegator,
                       position,
-                      moniker,
                     ),
                     onUnstake: () => _open(
                       context,

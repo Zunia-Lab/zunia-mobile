@@ -15,17 +15,14 @@ import 'package:zunia_mobile/state/staking.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/ui/facts.dart';
 import 'package:zunia_mobile/ui/network_sheet.dart';
-import 'package:zunia_mobile/ui/tx_flow.dart';
+import 'package:zunia_mobile/ui/claim_review.dart';
 import 'package:zunia_mobile/util/amounts.dart';
 import 'package:zunia_mobile/widgets/chain_avatar.dart';
 import 'package:zunia_mobile/widgets/validator_avatar.dart';
 import 'package:zunia_mobile/widgets/wallet_header.dart';
 import 'package:zunia_ui/zunia_ui.dart';
 
-/// Amount of [base] units on [chain], up to [digits] decimals.
-String stakeAmount(BigInt base, ChainEntry chain, {int digits = 4}) =>
-    '${formatBaseUnitsExact(base.toString(), decimals: chain.coinDecimals, maxFractionDigits: digits)} '
-    '${chain.coinDenom}';
+export 'package:zunia_mobile/state/staking.dart' show stakeAmount;
 
 /// "3 days left", "less than a day", "ready".
 String timeLeft(DateTime? at, {DateTime? now}) {
@@ -81,60 +78,13 @@ class _EarnTabState extends ConsumerState<EarnTab> {
     }
   }
 
-  Future<void> _claimAll(ChainAccount account, List<StakingPosition> rows) async {
-    final chain = account.chain;
-    final batches = claimMsgBatches(delegator: account.address, positions: rows);
-    if (batches.isEmpty) return;
-    final first = batches.first;
-    final claimed = rows
-        .where((p) => (p.rewards ?? BigInt.zero) > BigInt.zero)
-        .toList()
-      ..sort((a, b) => b.rewards!.compareTo(a.rewards!));
-    final included = claimed.take(first.length).toList();
-    var total = BigInt.zero;
-    for (final p in included) {
-      total += p.rewards!;
-    }
-    final sameDenom = chain.feeMinimalDenom.isEmpty ||
-        chain.feeMinimalDenom == chain.coinMinimalDenom;
-    await showTxReview(
-      context,
-      TxIntent(
-        title: 'Claim rewards',
-        action: 'Sign claim',
-        chain: chain,
-        signer: account.address,
-        msgs: first,
-        headlineLabel: 'You claim',
-        headline: '≈ ${stakeAmount(total, chain, digits: 6)}',
-        headlineLine: included.length == 1
-            ? 'From ${included.first.moniker} · ${chain.chainName}'
-            : 'From ${included.length} validators · ${chain.chainName}',
-        facts: [
-          for (final p in included)
-            (label: p.moniker, value: stakeAmount(p.rewards!, chain, digits: 6)),
-        ],
-        notice: batches.length > 1
-            ? 'This claims from the ${first.length} validators with the most '
-                'rewards. Claim again for the other '
-                '${claimed.length - first.length}: one transaction holding '
-                'them all could run past the network\'s gas limit.'
-            : null,
-        gainBaseUnits: sameDenom ? total : null,
-        offerNotifications: true,
-        result: const TxResultCopy(
-          sending: 'Claiming rewards',
-          done: 'Rewards claimed',
-          failed: 'Claim failed',
-          doneMessage: 'The rewards are in your available balance.',
-        ),
-        onSettled: () {
-          refreshStaking(ref, chain.chainId);
-          ref.invalidate(balancesProvider);
-        },
-      ),
-    );
-  }
+  Future<void> _claimAll(ChainAccount account, List<StakingPosition> rows) => reviewClaim(
+        context,
+        ref,
+        chain: account.chain,
+        delegator: account.address,
+        positions: rows,
+      );
 
   @override
   Widget build(BuildContext context) {

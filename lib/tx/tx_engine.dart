@@ -18,6 +18,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:zunia_core/zunia_core.dart';
 
 import 'package:zunia_mobile/tx/gas_fee.dart';
@@ -26,6 +27,7 @@ import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/security/signing_gate.dart';
 import 'package:zunia_mobile/services/broadcast_service.dart';
 import 'package:zunia_mobile/tx/tx_msg.dart';
+import 'package:zunia_mobile/tx/tx_inclusion.dart';
 
 enum FeeSpeed { low, average, high }
 
@@ -95,15 +97,45 @@ class TxException implements Exception {
   String toString() => message;
 }
 
+/// The chain ran the transaction in simulation and refused it: no delegation
+/// to claim from, not enough funds… Signed anyway it fails in the block and
+/// the fee is lost, so the review stops here instead of guessing a gas limit.
+class SimulationRefused extends TxException {
+  const SimulationRefused(super.message);
+}
+
+/// A simulation refusal that is about the transaction itself, not the node:
+/// the same transaction, signed, would be refused too.
+bool isExecutionRefusal(String message) {
+  final lower = message.toLowerCase();
+  return lower.contains('failed to execute message') ||
+      lower.contains('insufficient funds') ||
+      lower.contains('spendable balance');
+}
+
+/// Gas assumed per message when a node will not simulate. Measured on
+/// 2026-11-15: a reward claim takes about 70k on Safrochain, 130k on
+/// Injective, 230k on Osmosis and 320–380k on the Cosmos Hub, so a fixed
+/// 400000 for the whole transaction ran a multi-validator claim out of gas.
+const fallbackGasPerMessage = 400000;
+
+/// The gas limit used when a node will not simulate [messages] messages.
+int fallbackGasFor(int messages) => math.max(fallbackGasLimit, messages * fallbackGasPerMessage);
+
 class TxEngine {
-  TxEngine({BroadcastService? broadcast, WalletKernel? kernel})
-      : _broadcast = broadcast ?? BroadcastService.instance,
-        _kernelOverride = kernel;
+  TxEngine({
+    BroadcastService? broadcast,
+    WalletKernel? kernel,
+    @visibleForTesting Future<bool> Function(ChainEntry chain, String hash)? inclusionCheck,
+  })  : _broadcast = broadcast ?? BroadcastService.instance,
+        _kernelOverride = kernel,
+        _inclusionCheck = inclusionCheck;
 
   static final instance = TxEngine();
 
   final BroadcastService _broadcast;
   final WalletKernel? _kernelOverride;
+  final Future<bool> Function(ChainEntry chain, String hash)? _inclusionCheck;
 
   WalletKernel get _kernel => _kernelOverride ?? WalletKernel.instance;
 
@@ -171,12 +203,17 @@ class TxEngine {
         // and quote that one, rather than a fee from a fixed gas limit.
         final expected = isSequenceMismatch(e.message) ? expectedSequenceOf(e.message) : null;
         if (expected == null || expected == sequence) rethrow;
+        // The chain's word beats a remembered floor: a transaction this app
+        // sent may never have landed, and the floor would keep skipping it.
+        SequenceFloor.instance.trust(chain.chainId, signer, expected);
         sequence = expected;
         gasUsed = await simulateAt(sequence);
       }
       gasLimit = (gasUsed * gasAdjustment).ceil();
+    } on SimulationRefused {
+      rethrow;
     } on TxException catch (e) {
-      gasLimit = fallbackGasLimit;
+      gasLimit = fallbackGasFor(msgs.length);
       feeNote = '${chain.chainName} would not simulate this transaction (${e.message}). '
           'The fee below uses a fixed $gasLimit gas limit and may be wrong.';
     }
@@ -324,17 +361,28 @@ class TxEngine {
         sequence: sequence,
         mode: ZuniaSignMode.direct,
       );
+      final txBytes = bytesOfHex(txHex);
+      // A Cosmos transaction's hash is SHA-256 of its bytes: known before any
+      // node answers, so a lost answer does not lose the transaction.
+      final localHash = sha256.convert(txBytes).toString().toUpperCase();
       try {
         final result = await _broadcast.broadcast(
           chainId: chainId,
-          txBytesBase64: base64Encode(bytesOfHex(txHex)),
+          txBytesBase64: base64Encode(txBytes),
         );
         SequenceFloor.instance.remember(chainId, quote.signer, sequence + 1);
         return result.txhash;
       } on BroadcastException catch (e) {
-        if (attempt == 0 && isSequenceMismatch(e.message, code: e.code)) {
+        // The very same bytes are already waiting in the node's mempool: an
+        // earlier attempt whose answer was lost. That one is this transaction.
+        if (isAlreadyInMempool(e.message, code: e.code)) {
+          SequenceFloor.instance.remember(chainId, quote.signer, sequence + 1);
+          return localHash;
+        }
+        if (attempt < maxSequenceRetries && isSequenceMismatch(e.message, code: e.code)) {
           final expected = expectedSequenceOf(e.message) ?? await _liveSequence(chainId, quote.signer);
           if (expected != null && expected != sequence) {
+            SequenceFloor.instance.trust(chainId, quote.signer, expected);
             sequence = expected;
             continue;
           }
@@ -346,8 +394,43 @@ class TxEngine {
           explainChainError(e.message),
           txhash: e.code == null ? e.txhash : null,
         );
+      } on Object catch (e) {
+        if (e is TxException) rethrow;
+        // No answer (timeout, dropped connection): the node may have taken it.
+        // Look it up before calling it a failure, so a claim that went through
+        // is not reported as failed and then sent twice.
+        final seen = await _lookUp(quote.chain, localHash);
+        if (seen) {
+          SequenceFloor.instance.remember(chainId, quote.signer, sequence + 1);
+          return localHash;
+        }
+        throw TxException(
+          '${quote.chain.chainName} did not answer in time. The transaction may '
+          'still arrive: check Activity before you send it again.',
+          txhash: localHash,
+        );
       }
     }
+  }
+
+  /// Whether [hash] is in a block on [chain] within a short wait.
+  Future<bool> _lookUp(ChainEntry chain, String hash) async {
+    try {
+      final inclusion = await (_inclusionCheck ?? _defaultInclusionCheck)(chain, hash);
+      return inclusion;
+    } on Object {
+      return false;
+    }
+  }
+
+  static Future<bool> _defaultInclusionCheck(ChainEntry chain, String hash) async {
+    final result = await waitForInclusion(
+      chain,
+      hash,
+      within: const Duration(seconds: 12),
+      every: const Duration(seconds: 3),
+    );
+    return result is Included || result is FailedInBlock;
   }
 
   Future<int?> _liveSequence(String chainId, String address) async {
@@ -418,6 +501,9 @@ class TxEngine {
         final message = body is Map<String, dynamic>
             ? (body['message'] as String? ?? 'HTTP ${response.statusCode}')
             : 'HTTP ${response.statusCode}';
+        if (!isSequenceMismatch(message) && isExecutionRefusal(message)) {
+          throw SimulationRefused(explainChainError(message));
+        }
         throw TxException(explainChainError(message));
       }
       final used = (body['gas_info'] as Map<String, dynamic>?)?['gas_used'];
@@ -475,6 +561,19 @@ String explainChainError(String raw) {
 
 /// Whether a refusal is the chain's sequence check (SDK error code 32, or its
 /// words when a node returns only the log).
+/// Sequence refusals answered with the sequence the chain names, before the
+/// refusal is shown: a stale public node, a transaction that never landed.
+const maxSequenceRetries = 3;
+
+/// The node already holds these exact bytes (`tx already exists in cache`,
+/// code 19): an earlier attempt whose answer never came back.
+bool isAlreadyInMempool(String message, {int? code}) {
+  if (code == 19) return true;
+  final lower = message.toLowerCase();
+  return lower.contains('tx already exists in cache') ||
+      lower.contains('tx already in mempool');
+}
+
 bool isSequenceMismatch(String message, {int? code}) {
   if (code == 32) return true;
   final lower = message.toLowerCase();
@@ -522,6 +621,13 @@ class SequenceFloor {
       return sequence;
     }
     return math.max(sequence, floor.sequence);
+  }
+
+  /// The chain said it expects [expected]: that replaces the floor, even a
+  /// higher one. A floor above what the chain expects belongs to a
+  /// transaction that never landed, and would skip a sequence forever.
+  void trust(String chainId, String address, int expected) {
+    _next['$chainId|$address'] = (sequence: expected, at: _now());
   }
 
   bool _fresh(DateTime at) => _now().difference(at) < ttl;
