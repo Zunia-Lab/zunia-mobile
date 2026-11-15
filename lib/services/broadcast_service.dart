@@ -56,7 +56,7 @@ class BroadcastService {
       }
       throw BroadcastException('Account query HTTP ${res.statusCode}');
     }
-    return _parseAccount(body);
+    return parseAccountNumbers(body);
   }
 
   Future<BroadcastResult> broadcast({
@@ -103,22 +103,6 @@ class BroadcastService {
     return rest;
   }
 
-  ({String accountNumber, String sequence}) _parseAccount(
-    Map<String, dynamic> body,
-  ) {
-    if (body['account'] == null && body.containsKey('account')) {
-      return (accountNumber: '0', sequence: '0');
-    }
-    final envelope = (body['account'] as Map<String, dynamic>?) ??
-        (body['info'] as Map<String, dynamic>?) ??
-        body;
-    final nested =
-        (envelope['base_account'] as Map<String, dynamic>?) ?? envelope;
-    return (
-      accountNumber: '${nested['account_number'] ?? '0'}',
-      sequence: '${nested['sequence'] ?? '0'}',
-    );
-  }
 
   Future<({int statusCode, Map<String, dynamic> body})> _request(
     String method,
@@ -156,4 +140,54 @@ class BroadcastService {
       client.close(force: true);
     }
   }
+}
+
+/// The account number and sequence in a `/cosmos/auth/v1beta1/accounts/{addr}`
+/// answer, whatever kind of account it is.
+///
+/// The two numbers sit at different depths: on a `BaseAccount` itself; under
+/// `base_account` on an Ethermint or Injective `EthAccount` and on a module
+/// account; under `base_vesting_account.base_account` on every vesting
+/// account (continuous, periodic, delayed, permanent-locked, Evmos clawback).
+/// Reading only `base_account` took a vesting account for number 0, sequence
+/// 0. About half of Safrochain's accounts are vesting accounts, and every
+/// transaction they signed was refused ("signature verification failed;
+/// please verify account number … and sequence"), since the number is part of
+/// what is signed and simulation does not check it.
+///
+/// An absent account (`{"account": null}`) is a new one: 0 and 0. An account
+/// whose numbers cannot be found throws rather than guess: a guessed number
+/// signs a transaction the chain refuses.
+({String accountNumber, String sequence}) parseAccountNumbers(Map<String, dynamic> body) {
+  if (body.containsKey('account') && body['account'] == null) {
+    return (accountNumber: '0', sequence: '0');
+  }
+  final envelope = body['account'] ?? body['info'] ?? body;
+  final holder = _numbersHolder(envelope, 0);
+  if (holder == null) {
+    throw BroadcastException('The account answer has no account number');
+  }
+  final number = '${holder['account_number']}';
+  final sequence = '${holder['sequence'] ?? '0'}';
+  if (!RegExp(r'^\d+$').hasMatch(number) || !RegExp(r'^\d+$').hasMatch(sequence)) {
+    throw BroadcastException('The account answer has an unreadable account number or sequence');
+  }
+  return (accountNumber: number, sequence: sequence);
+}
+
+/// The first map that carries `account_number`: depth-first, through the
+/// known wrappers before any other nested map.
+Map<String, dynamic>? _numbersHolder(Object? node, int depth) {
+  if (node is! Map || depth > 4) return null;
+  final map = node.cast<String, dynamic>();
+  if (map.containsKey('account_number')) return map;
+  for (final key in const ['base_account', 'base_vesting_account', 'account']) {
+    final found = _numbersHolder(map[key], depth + 1);
+    if (found != null) return found;
+  }
+  for (final value in map.values) {
+    final found = _numbersHolder(value, depth + 1);
+    if (found != null) return found;
+  }
+  return null;
 }
