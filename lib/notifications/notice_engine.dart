@@ -44,6 +44,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/notifications/chain_stream.dart';
+import 'package:zunia_mobile/notifications/coin_words.dart';
 import 'package:zunia_mobile/notifications/device_alerts.dart';
 import 'package:zunia_mobile/notifications/notices.dart';
 import 'package:zunia_mobile/notifications/notify_prefs.dart';
@@ -51,7 +52,6 @@ import 'package:zunia_mobile/notifications/realtime_protocol.dart';
 import 'package:zunia_mobile/services/chain_reader.dart';
 import 'package:zunia_mobile/services/governance_client.dart';
 import 'package:zunia_mobile/services/staking_client.dart';
-import 'package:zunia_mobile/util/amounts.dart';
 
 /// Chains given a live socket. The rest are covered by the tick, so it is the
 /// latency that degrades past this, not the coverage.
@@ -243,23 +243,31 @@ ChainStream _defaultOpenStream({
       onState: onState,
     );
 
-/// A coin named on the chain it landed on: the chain's own currencies are
-/// scaled, anything else stays in base units ([describeCoinRaw]).
+/// A coin named on the chain it landed on, by its own identity
+/// ([describeMovedCoin]): `15 USDC.inj (Injective USDC)`, never the chain's
+/// coin for a foreign denom. Base units when nothing proves its scale.
 String describeCoinOn(ChainEntry? chain, MovedCoin coin) {
-  if (chain != null && RegExp(r'^\d+$').hasMatch(coin.amount)) {
-    if (coin.denom == chain.coinMinimalDenom) {
-      return '${formatBaseUnitsExact(coin.amount, decimals: chain.coinDecimals, maxFractionDigits: 6)} '
-          '${chain.coinDenom}';
-    }
+  if (chain == null) return describeCoinRaw('', coin);
+  int? decimals;
+  String? symbol;
+  if (coin.denom == chain.coinMinimalDenom) {
+    decimals = chain.coinDecimals;
+    symbol = chain.coinDenom;
+  } else {
     for (final currency in chain.currencies) {
-      if (currency.coinMinimalDenom == coin.denom &&
-          currency.coinDenom.isNotEmpty) {
-        return '${formatBaseUnitsExact(coin.amount, decimals: currency.coinDecimals, maxFractionDigits: 6)} '
-            '${currency.coinDenom}';
+      if (currency.coinMinimalDenom == coin.denom) {
+        decimals = currency.coinDecimals;
+        symbol = currency.coinDenom;
       }
     }
   }
-  return describeCoinRaw(chain?.chainId ?? '', coin);
+  return describeMovedCoin(
+    chain.chainId,
+    coin.denom,
+    coin.amount,
+    decimalsHint: decimals,
+    symbolHint: symbol,
+  );
 }
 
 class NoticeEngine extends StateNotifier<NoticeFeed> {
@@ -270,6 +278,7 @@ class NoticeEngine extends StateNotifier<NoticeFeed> {
     DateTime Function()? clock,
     this.onBalancesMoved,
     this.onResumed,
+    this.learnDenoms,
     bool observeLifecycle = true,
   })  : _alerts = alerts,
         _staking = StakingClient(reader),
@@ -296,6 +305,13 @@ class NoticeEngine extends StateNotifier<NoticeFeed> {
   /// Called when a chain event means the account's balances changed, so the
   /// portfolio can re-read them.
   final void Function(String chainId)? onBalancesMoved;
+
+  /// Traces vouchers on a chain (see `identifyHeld`), so a notice can name
+  /// what arrived. Null in tests that do not read chains.
+  final Future<void> Function(String chainId, List<String> denoms)? learnDenoms;
+
+  /// How long a notice waits for [learnDenoms] before it is shown anyway.
+  static const learnBudget = Duration(seconds: 8);
 
   /// Called when the app comes back to the foreground with the engine
   /// running: the sockets were down meanwhile, so what arrived then is only
@@ -494,7 +510,21 @@ class NoticeEngine extends StateNotifier<NoticeFeed> {
     if (arrival != null && !_arrivals.any((a) => a.hash == arrival.hash)) {
       _arrivals = [arrival, ..._arrivals].take(maxArrivals).toList();
       unawaited(_save(_kArrivals, [for (final a in _arrivals) a.toJson()]));
-      _refresh();
+      // A voucher nothing names yet is traced first, so the notice and the
+      // device alert say "15 USDC.inj (Injective USDC)" rather than base units.
+      final untraced =
+          untracedVouchers(arrival.chainId, [for (final c in arrival.coins) c.denom]);
+      final learn = learnDenoms;
+      if (untraced.isEmpty || learn == null) {
+        _refresh();
+      } else {
+        unawaited(
+          learn(arrival.chainId, untraced)
+              .timeout(learnBudget, onTimeout: () {})
+              .catchError((Object _) {})
+              .whenComplete(_refresh),
+        );
+      }
     }
     _bursts.remove(notice.chainId)?.cancel();
     _bursts[notice.chainId] = Timer(burstWindow, () {

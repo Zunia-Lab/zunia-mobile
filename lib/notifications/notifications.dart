@@ -21,6 +21,7 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/activity/activity_model.dart';
 import 'package:zunia_mobile/config/connect_config.dart';
+import 'package:zunia_mobile/notifications/coin_words.dart';
 import 'package:zunia_mobile/notifications/device_alerts.dart';
 import 'package:zunia_mobile/notifications/notice_engine.dart';
 import 'package:zunia_mobile/notifications/notices.dart';
@@ -31,10 +32,10 @@ import 'package:zunia_mobile/services/chain_reader.dart';
 import 'package:zunia_mobile/services/native_connect_service.dart';
 import 'package:zunia_mobile/services/push_messaging.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
+import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
-import 'package:zunia_mobile/state/staking.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
-import 'package:zunia_mobile/util/amounts.dart';
+import 'package:zunia_mobile/tokens/token_identity.dart';
 
 export 'package:zunia_mobile/notifications/notices.dart'
     show Notice, NoticeKind, NoticeRoute, NoticeTarget;
@@ -123,7 +124,24 @@ final noticeEngineProvider =
     );
   }
 
+  // Traces vouchers so a notice can name what arrived: the same lookup the
+  // balances use, and only while live reads are on.
+  Future<void> learn(String chainId, List<String> denoms) async {
+    if (!ref.read(preferencesProvider).liveReads) return;
+    final resolver = ref.read(denomResolverProvider);
+    await identifyHeld(chainId, denoms, lookup: (chainId, denom) async {
+      final resolved = await resolver.resolve(chainId, denom);
+      return (
+        baseDenom: resolved.baseDenom,
+        path: resolved.path,
+        originChainId: resolved.originChainId,
+        hopChainIds: resolved.hopChainIds,
+      );
+    });
+  }
+
   final engine = NoticeEngine(
+    learnDenoms: learn,
     alerts: ref.watch(deviceAlertsProvider),
     // Read the switch on every request rather than rebuilding the engine
     // (and dropping its sockets) each time it changes.
@@ -176,7 +194,23 @@ final noticeEngineProvider =
   // sockets, and anything that arrived while the app was in the background.
   ref.listen<ActivityFeedState>(
     activityFeedProvider,
-    (_, next) => scheduleMicrotask(() {
+    (_, next) => scheduleMicrotask(() async {
+      // Vouchers nothing names yet are traced before the rows are worded, so
+      // a first USDC arrival reads "15 USDC.inj (Injective USDC)".
+      final byChain = <String, List<String>>{};
+      for (final item in next.items) {
+        final denom = item.denom;
+        if (item.kind != ActivityKind.received || denom == null) continue;
+        (byChain[item.chainId] ??= []).add(denom);
+      }
+      await Future.wait([
+        for (final MapEntry(key: chainId, value: denoms) in byChain.entries)
+          if (untracedVouchers(chainId, denoms) case final untraced
+              when untraced.isNotEmpty)
+            learn(chainId, untraced)
+                .timeout(NoticeEngine.learnBudget, onTimeout: () {})
+                .catchError((Object _) {}),
+      ]);
       if (engine.mounted) engine.setReceived(receivedNoticeInputs(next.items));
     }),
     fireImmediately: true,
@@ -197,15 +231,22 @@ void _readAgain(Ref ref) {
 }
 
 /// The history's incoming transfers, as the engine's received rows.
+///
+/// Each amount is worded with the denom that moved, not the chain's coin: 15
+/// USDC received on Safrochain used to read "15 SAF".
 List<ReceivedNoticeInput> receivedNoticeInputs(List<ActivityItem> items) {
   final rows = <ReceivedNoticeInput>[];
   for (final item in items) {
     if (item.kind != ActivityKind.received || !item.success) continue;
-    final chain = catalogChain(item.chainId);
     final amount = item.amount;
-    final meta = chain != null && amount != null && !amount.startsWith('-')
-        ? '${formatBaseUnitsExact(amount, decimals: chain.coinDecimals, maxFractionDigits: 6)} '
-            '${chain.coinDenom}'
+    final denom = item.denom;
+    final meta = amount != null && denom != null && !amount.startsWith('-')
+        ? describeMovedCoin(
+            item.chainId,
+            denom,
+            amount,
+            decimalsHint: item.decimalsKnown ? item.decimals : null,
+          )
         : item.subtitle;
     rows.add(
       ReceivedNoticeInput(
