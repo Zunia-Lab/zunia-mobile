@@ -6,6 +6,7 @@
 /// reads off they return nothing and the screens show that state first.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/services/chain_reader.dart';
@@ -14,6 +15,7 @@ import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/tx/tx_engine.dart';
 import 'package:zunia_mobile/tx/tx_msg.dart';
+import 'package:zunia_mobile/util/amounts.dart';
 
 /// One read client for staking, governance and notices, gated on live reads.
 final chainReaderProvider = Provider<ChainReader>((ref) {
@@ -195,6 +197,69 @@ List<List<TxMsg>> claimMsgBatches({
   }
   return batches;
 }
+
+/// One claim transaction, as every Claim button builds it.
+///
+/// The Earn tab, the Rewards screen and a validator's page used to build
+/// their own, each slightly differently; one plan keeps the message list,
+/// the validators named on the review and the total in step.
+@immutable
+class ClaimPlan {
+  const ClaimPlan({
+    required this.msgs,
+    required this.included,
+    required this.total,
+    required this.remaining,
+  });
+
+  /// One `MsgWithdrawDelegatorReward` per validator in [included].
+  final List<TxMsg> msgs;
+
+  /// The validators this claim withdraws from, most rewards first.
+  final List<StakingPosition> included;
+
+  /// What [included] holds, in base units of the staking denom.
+  final BigInt total;
+
+  /// Validators with rewards left for another claim, past [maxClaimsPerTx].
+  final int remaining;
+
+  bool get isEmpty => msgs.isEmpty;
+}
+
+/// The first claim for [positions]: validators with rewards, most first, at
+/// most [maxPerTx] of them. Empty when nothing can be claimed, which a Claim
+/// button must check before it opens a review: withdrawing nothing still
+/// costs a fee.
+ClaimPlan claimPlan({
+  required String delegator,
+  required List<StakingPosition> positions,
+  int maxPerTx = maxClaimsPerTx,
+}) {
+  final claimable = positions
+      .where((p) => (p.rewards ?? BigInt.zero) > BigInt.zero)
+      .toList()
+    ..sort((a, b) => b.rewards!.compareTo(a.rewards!));
+  final included = claimable.take(maxPerTx).toList(growable: false);
+  var total = BigInt.zero;
+  for (final p in included) {
+    total += p.rewards!;
+  }
+  return ClaimPlan(
+    msgs: [
+      for (final p in included)
+        TxMsg.withdrawReward(delegator: delegator, validator: p.validatorAddress),
+    ],
+    included: included,
+    total: total,
+    remaining: claimable.length - included.length,
+  );
+}
+
+/// Amount of [base] units on [chain], up to [digits] decimals.
+String stakeAmount(BigInt base, ChainEntry chain, {int digits = 4}) =>
+    '${formatBaseUnitsExact(base.toString(), decimals: chain.coinDecimals, maxFractionDigits: digits)} '
+    '${chain.coinDenom}';
 
 /// Total rewards across [positions] that can be claimed; null when any
 /// position's rewards are unknown, since a partial sum would understate it.
