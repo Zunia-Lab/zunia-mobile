@@ -22,6 +22,7 @@ import 'package:zunia_mobile/services/interchain/lcd.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
+import 'package:zunia_mobile/state/swap_balances.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/swap/one_signature.dart';
@@ -230,16 +231,40 @@ class _SwapReviewScreenState extends ConsumerState<SwapReviewScreen> {
       );
       if (!mounted) return;
       ZuniaHaptics.success();
-      ref.invalidate(swapHoldingsProvider);
+      _followBalances(hash);
       await _showResult(data, hash);
     } on Object catch (error) {
       if (!mounted) return;
+      // A transaction the chain refused still cost its fee, and a swap that
+      // never left leaves nothing to follow: read the balance either way.
+      if (error is TxException && error.txhash != null) {
+        _followBalances(error.txhash!);
+      } else {
+        unawaited(
+          ref
+              .read(swapBalancesProvider.notifier)
+              .refresh([_quote.chain.chainId]),
+        );
+      }
       ZuniaHaptics.error();
       setState(() {
         _signing = false;
         _error = error is TxException ? error.message : '$error';
       });
     }
+  }
+
+  /// The balances follow the swap on their own from here, whichever screen
+  /// is showing it: the source once it is in a block, and a destination on
+  /// another chain until it changes or the packets are done.
+  void _followBalances(String hash) {
+    ref
+        .read(swapBalancesProvider.notifier)
+        .followSwap(
+          source: _quote.chain,
+          txHash: hash,
+          destinationChainId: _review.to.chainId,
+        );
   }
 
   Future<void> _showResult(SwapData data, String hash) {
@@ -976,7 +1001,11 @@ class _SwapResultScreenState extends ConsumerState<SwapResultScreen> {
       } else {
         ZuniaHaptics.error();
       }
-      ref.invalidate(swapHoldingsProvider);
+      unawaited(
+        ref
+            .read(swapBalancesProvider.notifier)
+            .refresh([data?.venueChainId ?? 'osmosis-1']),
+      );
     } on InterchainError {
       // Not indexed yet; ask again on the next tick.
     }
