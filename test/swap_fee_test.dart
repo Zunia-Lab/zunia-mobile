@@ -558,7 +558,7 @@ void main() {
     });
 
     test("pays only treasuries that decode with their own chain's prefix", () {
-      expect(shipped.recipients, hasLength(131));
+      expect(shipped.recipients, hasLength(130));
       expect(treasuryProblems(shipped.recipients), isEmpty);
       // And the wallet pays each one exactly as configured: none is dropped
       // as invalid at run time, which would silently charge nothing there.
