@@ -23,6 +23,8 @@ import 'package:zunia_mobile/crypto/wallet_kernel.dart';
 import 'package:zunia_mobile/tokens/token_identity.dart' show identityOf;
 import 'package:zunia_mobile/util/amounts.dart';
 
+part 'amino_dapp.dart';
+
 /// One message of a transaction, in the words the prompt shows.
 class ReviewMessage {
   const ReviewMessage({
@@ -46,7 +48,10 @@ class ReviewMessage {
   final String? recipient;
 
   /// What the summary leaves out: `{kind: execute-contract, contract, msg,
-  /// funds}` or `{kind: ibc-transfer, sourceChannel, receiver, token, memo}`.
+  /// funds}`, `{kind: ibc-transfer, sourceChannel, receiver, token, memo}`,
+  /// `{kind: multi-send, inputs, outputs}`, `{kind: instantiate-contract,
+  /// codeId, label, admin, msg, funds, salt?, fixMsg?}` or `{kind:
+  /// migrate-contract, contract, codeId, msg}`.
   final Map<String, Object?>? detail;
 
   ReviewMessage copyWith({String? summary, String? recipient}) => ReviewMessage(
@@ -564,14 +569,28 @@ final Map<String, _Description? Function(Map<String, dynamic>)> _describers = {
 };
 
 /// Every Amino type [describeAminoMsg] reads.
-List<String> get describedAminoTypes => _describers.keys.toList();
+List<String> get describedAminoTypes => [..._describers.keys, ..._dappDescribers.keys];
 
 /// The kernel's sentence for an Amino message of one of the described types,
 /// or null for any other type and for one not in the shape the chain's Amino
 /// JSON gives it, which the caller shows with its generic summary.
 ReviewMessage? describeAminoMsg(String type, Object? value) {
-  final describe = _describers[type];
   final body = _fields(value);
+  final dapp = _dappDescribers[type];
+  // A message the kernel reads in direct mode but not in this shape, and the
+  // types it never reads, are unknown here too: gated, never described.
+  if (dapp != null || _neverDescribed(type)) {
+    final said = dapp != null && body != null ? dapp(body) : null;
+    return said == null
+        ? ReviewMessage(type: type, summary: 'Message $type', unknown: true)
+        : ReviewMessage(
+            type: type,
+            summary: said.summary,
+            recipient: said.recipient,
+            detail: said.detail,
+          );
+  }
+  final describe = _describers[type];
   final said = describe != null && body != null ? describe(body) : null;
   return said == null
       ? null
@@ -1040,6 +1059,12 @@ const _unknownSummaryPrefix = 'UNKNOWN ACTION:';
   );
 }
 
+bool _shownCoins(Object? value) =>
+    value is List && value.every((c) => c is Map && c['denom'] is String && c['amount'] is String);
+
+bool _shownEntries(Object? value) =>
+    value is List && value.every((e) => e is Map && e['address'] is String && _shownCoins(e['coins']));
+
 Map<String, Object?>? _detailOf(Object? value) {
   if (value is! Map) return null;
   final detail = Map<String, Object?>.from(value);
@@ -1050,6 +1075,25 @@ Map<String, Object?>? _detailOf(Object? value) {
   }
   if (detail['kind'] == 'ibc-transfer') {
     return detail['receiver'] is String && detail['sourceChannel'] is String && detail['memo'] is String
+        ? detail
+        : null;
+  }
+  if (detail['kind'] == 'multi-send') {
+    return _shownEntries(detail['inputs']) && _shownEntries(detail['outputs']) ? detail : null;
+  }
+  if (detail['kind'] == 'instantiate-contract') {
+    final v2 = detail.containsKey('salt') || detail.containsKey('fixMsg');
+    return detail['codeId'] is String &&
+            detail['label'] is String &&
+            (detail['admin'] == null || detail['admin'] is String) &&
+            detail.containsKey('msg') &&
+            _shownCoins(detail['funds']) &&
+            (!v2 || (detail['salt'] is String && detail['fixMsg'] is bool))
+        ? detail
+        : null;
+  }
+  if (detail['kind'] == 'migrate-contract') {
+    return detail['contract'] is String && detail['codeId'] is String && detail.containsKey('msg')
         ? detail
         : null;
   }
