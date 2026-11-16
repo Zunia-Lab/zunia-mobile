@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:zunia_mobile/chains/chain_catalog.dart';
 import 'package:zunia_mobile/screens/networks_screen.dart';
 import 'package:zunia_mobile/screens/send_screen.dart';
+import 'package:zunia_mobile/screens/swap/swap_retry.dart';
 import 'package:zunia_mobile/screens/swap/swap_settings_sheet.dart';
 import 'package:zunia_mobile/screens/swap/swap_token_sheet.dart';
 import 'package:zunia_mobile/screens/swap/swap_widgets.dart';
@@ -26,6 +27,7 @@ import 'package:zunia_mobile/services/interchain/route.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/state/interchain.dart';
 import 'package:zunia_mobile/state/preferences.dart';
+import 'package:zunia_mobile/state/swap_balances.dart';
 import 'package:zunia_mobile/state/swap_state.dart';
 import 'package:zunia_mobile/prices/fiat.dart';
 import 'package:zunia_mobile/state/chain_data.dart';
@@ -84,6 +86,12 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
   bool _busy = false;
   String? _error;
   bool _foreground = true;
+  bool _wasVisible = false;
+  bool _wasVisibleKnown = false;
+
+  /// The price the last manual refresh failed to replace, and what to say.
+  DateTime? _priceStuckAt;
+  bool _priceStuck = false;
 
   @override
   void initState() {
@@ -106,9 +114,47 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The tab is kept alive under the others, so it is not built again when
+    // it is shown: its ticker mode (and its route) change instead.
+    final visible = _visible();
+    if (visible && !_wasVisible) {
+      final first = !_wasVisibleKnown;
+      // The first read is the provider's own, when it is still on its way.
+      if (!first || ref.read(swapHoldingsProvider).hasValue) {
+        // Not while the tree is being built: the read moves provider state.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _visible()) _refreshBalances();
+        });
+      }
+    }
+    _wasVisible = visible;
+    _wasVisibleKnown = true;
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
-    if (_foreground) _scheduleRefresh(ref.read(swapViewProvider));
+    if (_foreground) {
+      _scheduleRefresh(ref.read(swapViewProvider));
+      if (_visible()) _refreshBalances();
+    }
+  }
+
+  /// Read the balances of the chains in play again, behind the numbers
+  /// already on screen. Without a pair picked, every enabled chain.
+  void _refreshBalances() {
+    final view = ref.read(swapViewProvider);
+    final ids = {
+      if (view.from != null) view.from!.chainId,
+      if (view.to != null) view.to!.chainId,
+    };
+    unawaited(
+      ref
+          .read(swapBalancesProvider.notifier)
+          .refresh(ids.isEmpty ? null : ids, minAge: const Duration(seconds: 5)),
+    );
   }
 
   /// Plan after the inputs settle: the amount field fires per keystroke and a
@@ -259,7 +305,9 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
       if (done == true && mounted) {
         _controller.clearAmount();
         _amount.clear();
-        ref.invalidate(swapHoldingsProvider);
+        // The review follows the swap itself; this only catches a reader that
+        // came back to the form before it had.
+        _refreshBalances();
       }
     } on Object catch (error) {
       if (!mounted) return;
@@ -405,6 +453,7 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
                 keyboardDismissBehavior:
                     ScrollViewKeyboardDismissBehavior.onDrag,
                 children: [
+                  _BalanceStatus(liveReads: view.liveReads),
                   _PayCard(
                     view: view,
                     controller: _amount,
@@ -436,7 +485,10 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
                     SwapQuoteClock(
                       secondsLeft: _secondsLeft(view),
                       refreshing: view.refreshing,
-                      onRefresh: () => unawaited(_controller.refresh(view)),
+                      onRefresh: () => unawaited(_refreshPrice(view)),
+                      note: _priceStuck && _priceStuckAt == view.quotedAt
+                          ? 'Still unavailable — checked just now'
+                          : null,
                     ),
                   ],
                   ..._notes(context, view),
@@ -450,8 +502,22 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
     );
   }
 
+  /// The price card's Refresh: say so when the price could not be replaced.
+  Future<void> _refreshPrice(SwapView view) async {
+    final before = view.quotedAt;
+    setState(() => _priceStuck = false);
+    await _controller.refresh(view);
+    if (!mounted) return;
+    setState(() {
+      _priceStuckAt = before;
+      _priceStuck = ref.read(swapViewProvider).quotedAt == before;
+    });
+  }
+
   /// Pull to refresh: read the balances again and plan the same inputs anew.
   Future<void> _reload() async {
+    // The new base read is newer than every re-read laid over the old one.
+    ref.read(swapBalancesProvider.notifier).reset();
     ref.invalidate(swapHoldingsProvider);
     _controller.retry();
     try {
@@ -520,10 +586,13 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
         ),
       );
     }
-    if (view.path == SwapPath.contract &&
+    // The previous answer stays in view while the contract is checked again,
+    // so the retry under it is not taken away mid-check.
+    final venueOff =
+        view.path == SwapPath.contract &&
         view.venue != null &&
-        !view.venue!.ready &&
-        !view.venueLoading) {
+        !view.venue!.ready;
+    if (venueOff) {
       add(
         ZuniaCallout(
           tone: ZuniaCalloutTone.danger,
@@ -533,6 +602,39 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
         ),
       );
     }
+    out.add(
+      SwapRetry(
+        key: const ValueKey('swap-retry-venue'),
+        active: venueOff,
+        label: 'Check again',
+        semanticLabel: 'Check the swap contract again',
+        onRetry: () => retryVenue(ref),
+      ),
+    );
+    final entryOff =
+        view.path == SwapPath.oneSignature &&
+        view.entryPoint != null &&
+        !view.entryPoint!.ready;
+    if (entryOff) {
+      add(
+        ZuniaCallout(
+          tone: ZuniaCalloutTone.danger,
+          title: 'One-signature swaps are off',
+          body:
+              view.entryPoint!.reason ??
+              'The swap contract on Osmosis could not be confirmed.',
+        ),
+      );
+    }
+    out.add(
+      SwapRetry(
+        key: const ValueKey('swap-retry-entry-point'),
+        active: entryOff,
+        label: 'Check again',
+        semanticLabel: 'Check the swap contract on Osmosis again',
+        onRetry: () => retryEntryPoint(ref),
+      ),
+    );
     if (view.quoteError != null && !view.planning) {
       add(
         ZuniaCallout(
@@ -542,6 +644,18 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
         ),
       );
     }
+    // With the route details open the route's own error carries this retry.
+    final routeCarries =
+        ref.read(swapSettingsProvider).routeDetails &&
+        view.path == SwapPath.contract;
+    out.add(
+      SwapRetry(
+        key: const ValueKey('swap-retry-price'),
+        active: view.quoteError != null && !routeCarries,
+        semanticLabel: 'Ask for the price again',
+        onRetry: () => retryPlan(ref),
+      ),
+    );
     if (view.path == SwapPath.oneSignature && from != null && to != null) {
       add(
         Text(
@@ -584,6 +698,14 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
         ),
       );
     }
+    out.add(
+      SwapRetry(
+        key: const ValueKey('swap-retry-osmosis-assets'),
+        active: view.osmosisError != null,
+        semanticLabel: 'Load the Osmosis token list again',
+        onRetry: () => retryOsmosisAssets(ref),
+      ),
+    );
     return out;
   }
 }
@@ -591,6 +713,63 @@ class _SwapTabState extends ConsumerState<SwapTab> with WidgetsBindingObserver {
 /* -------------------------------------------------------------------------- *
  * Layout pieces
  * -------------------------------------------------------------------------- */
+
+/// Balances being read again, quietly, and the chains that would not answer.
+class _BalanceStatus extends ConsumerWidget {
+  const _BalanceStatus({required this.liveReads});
+
+  final bool liveReads;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ZuniaSemanticsExt.of(context);
+    final busy = ref.watch(swapBalancesProvider.select((r) => r.busy));
+    final gaps = liveReads
+        ? ref.watch(swapBalanceGapsProvider)
+        : const <ChainEntry>[];
+    final names = gaps.map((c) => c.chainName).join(', ');
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 180),
+      alignment: Alignment.topCenter,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (busy)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Semantics(
+                liveRegion: true,
+                child: Row(
+                  children: [
+                    const ZuniaActivityIndicator(size: 12),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Updating balances…',
+                      style: zuniaMono(fontSize: 11, color: s.fgMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (gaps.isNotEmpty && !busy)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                "Couldn't read your balance on $names. Tokens there are not offered until it can be read.",
+                style: zuniaSans(fontSize: 12, height: 1.4, color: s.warning),
+              ),
+            ),
+          SwapRetry(
+            key: const ValueKey('swap-retry-balances'),
+            active: gaps.isNotEmpty,
+            semanticLabel: 'Read your balances again',
+            onRetry: () => retryBalances(ref, [for (final c in gaps) c.chainId]),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _Shell extends StatelessWidget {
   const _Shell({
@@ -1308,7 +1487,8 @@ class _RouteDetails extends ConsumerWidget {
           swapVenueName: venueName,
           loading: view.planning,
           error: view.contract?.error,
-          onRetry: () => ref.read(swapControllerProvider.notifier).retry(),
+          // Its own retry cannot show a check in progress; ours is below.
+          onRetry: null,
           emptyTitle: view.liveReads ? 'No route yet' : 'Route planning is off',
           emptyDescription: view.liveReads
               ? 'Pick both tokens and an amount, and Zunia will plan the hops.'
@@ -1335,6 +1515,12 @@ class _RouteDetails extends ConsumerWidget {
                         ]
                       : const [],
                 ),
+        ),
+        SwapRetry(
+          key: const ValueKey('swap-retry-route'),
+          active: view.contract?.error != null,
+          semanticLabel: 'Plan this route again',
+          onRetry: () => retryPlan(ref),
         ),
         if (contract != null) ...[
           const SizedBox(height: 8),
@@ -1498,20 +1684,26 @@ class _ChannelFieldState extends ConsumerState<_ChannelField> {
       return;
     }
     setState(() => _checking = true);
-    _debounce = Timer(const Duration(milliseconds: 450), () async {
-      final result = await ref
-          .read(channelServiceProvider)
-          .validateIbcChannel(
-            widget.sourceChainId,
-            normalized,
-            destChainId: widget.destChainId,
-          );
-      if (!mounted) return;
-      setState(() {
-        _check = result;
-        _checking = false;
-      });
+    _debounce = Timer(const Duration(milliseconds: 450), () => _validate());
+  }
+
+  /// Ask the source chain about the typed channel. True when it checks out.
+  Future<bool> _validate() async {
+    final normalized = normalizeChannelId(_controller.text);
+    if (normalized.isEmpty) return false;
+    final result = await ref
+        .read(channelServiceProvider)
+        .validateIbcChannel(
+          widget.sourceChainId,
+          normalized,
+          destChainId: widget.destChainId,
+        );
+    if (!mounted) return result.ok;
+    setState(() {
+      _check = result;
+      _checking = false;
     });
+    return result.ok;
   }
 
   @override
@@ -1544,6 +1736,12 @@ class _ChannelFieldState extends ConsumerState<_ChannelField> {
               style: zuniaMono(fontSize: 10.5, color: s.success),
             ),
           ),
+        SwapRetry(
+          active: !_checking && check != null && !check.ok,
+          label: 'Check again',
+          semanticLabel: 'Check this channel again',
+          onRetry: _validate,
+        ),
       ],
     );
   }

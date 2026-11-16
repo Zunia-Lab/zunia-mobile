@@ -74,6 +74,7 @@ class SwapQuoteClock extends StatelessWidget {
     required this.refreshing,
     required this.onRefresh,
     this.confirm = false,
+    this.note,
   });
 
   final int secondsLeft;
@@ -83,12 +84,18 @@ class SwapQuoteClock extends StatelessWidget {
   /// On the confirm card the price does not move on its own.
   final bool confirm;
 
+  /// What the last Refresh came to when it did not work, shown in place of
+  /// the countdown.
+  final String? note;
+
   @override
   Widget build(BuildContext context) {
     final s = ZuniaSemanticsExt.of(context);
     final expired = secondsLeft <= 0;
     final text = refreshing
         ? 'Updating the price…'
+        : note != null
+        ? note!
         : expired
         ? confirm
               ? 'Price expired. Refresh it to sign.'
@@ -109,7 +116,9 @@ class SwapQuoteClock extends StatelessWidget {
               text,
               style: zuniaMono(
                 fontSize: 11,
-                color: expired && !refreshing ? s.warning : s.fgMuted,
+                color: (expired || note != null) && !refreshing
+                    ? s.warning
+                    : s.fgMuted,
               ),
             ),
           ),
@@ -120,7 +129,12 @@ class SwapQuoteClock extends StatelessWidget {
           label: 'Refresh the price',
           excludeSemantics: true,
           child: TextButton(
-            onPressed: refreshing ? null : onRefresh,
+            onPressed: refreshing || onRefresh == null
+                ? null
+                : () {
+                    ZuniaHaptics.selection();
+                    onRefresh!();
+                  },
             style: TextButton.styleFrom(
               minimumSize: const Size(48, 36),
               padding: const EdgeInsets.symmetric(horizontal: 10),

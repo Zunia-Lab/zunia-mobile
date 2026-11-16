@@ -20,6 +20,7 @@ import 'package:zunia_mobile/services/interchain/tracking.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/services/wallet_tx_service.dart';
 import 'package:zunia_mobile/state/interchain.dart';
+import 'package:zunia_mobile/state/swap_balances.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/widgets/portfolio_feedback.dart';
 import 'package:zunia_ui/zunia_ui.dart';
@@ -102,6 +103,11 @@ class _PacketStatusScreenState extends ConsumerState<PacketStatusScreen> {
         _error = null;
         _loading = false;
       });
+      // Delivered, refunded or failed: a swap this packet belongs to reads its
+      // balances once more and stops watching.
+      if (isTerminalPacketStatus(trace.status)) {
+        ref.read(swapBalancesProvider.notifier).finishSwap(widget.sourceTxHash);
+      }
     } on InterchainError catch (error) {
       if (!mounted) return;
       setState(() {

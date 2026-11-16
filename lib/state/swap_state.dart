@@ -35,6 +35,7 @@ import 'package:zunia_mobile/services/interchain/swap.dart';
 import 'package:zunia_mobile/services/interchain/types.dart';
 import 'package:zunia_mobile/services/interchain/xcs_route.dart';
 import 'package:zunia_mobile/state/interchain.dart';
+import 'package:zunia_mobile/state/swap_balances.dart';
 import 'package:zunia_mobile/state/preferences.dart';
 import 'package:zunia_mobile/state/wallet_state.dart';
 import 'package:zunia_mobile/swap/one_signature.dart';
@@ -194,6 +195,8 @@ final swapRouterProvider = Provider<LcdClient>((ref) {
 
 /// Every denom each enabled chain holds, base units. A chain whose read
 /// fails is left out, so its tokens are not offered rather than offered at 0.
+/// Read past the transport's cache: a balance that is a few seconds old is
+/// how a swap gets refused for funds that are no longer there.
 final swapHoldingsProvider = FutureProvider<Map<String, List<HeldToken>>>((
   ref,
 ) async {
@@ -206,29 +209,39 @@ final swapHoldingsProvider = FutureProvider<Map<String, List<HeldToken>>>((
       () async {
         final chain = registry.get(account.chain.chainId);
         if (chain == null || lcdEndpointsFromChain(chain).isEmpty) return;
-        try {
-          final body = await factory(chain).getJson(
-            '/cosmos/bank/v1beta1/balances/${Uri.encodeComponent(account.address)}',
-            const LcdRequestOptions(
-              cacheTtl: Duration(seconds: 15),
-              query: {'pagination.limit': 1000},
-            ),
-          );
-          final rows = body is Map ? body['balances'] : null;
-          if (rows is! List) return;
-          out[account.chain.chainId] = [
-            for (final row in rows)
-              if (row is Map &&
-                  row['denom'] is String &&
-                  row['amount'] is String)
-                HeldToken(row['denom'] as String, row['amount'] as String),
-          ];
-        } on InterchainError {
-          // Unknown is not zero: the chain's tokens are simply not offered.
-        }
+        final tokens = await readHeldTokens(factory(chain), account.address);
+        if (tokens != null) out[account.chain.chainId] = tokens;
       }(),
   ]);
   return out;
+});
+
+/// The base read with every later re-read laid over it: what the form, MAX
+/// and the insufficient-balance check all read.
+final swapBalancesNowProvider = Provider<Map<String, List<HeldToken>>>((ref) {
+  final base = ref.watch(swapHoldingsProvider).valueOrNull ?? const {};
+  final fresh = ref.watch(swapBalancesProvider.select((r) => r.fresh));
+  return fresh.isEmpty ? base : {...base, ...fresh};
+});
+
+/// Enabled chains with an endpoint whose balances could not be read, by the
+/// base read or the latest re-read. Empty while the first read is pending.
+final swapBalanceGapsProvider = Provider<List<ChainEntry>>((ref) {
+  final base = ref.watch(swapHoldingsProvider);
+  if (!base.hasValue && !base.hasError) return const [];
+  final now = ref.watch(swapBalancesNowProvider);
+  final failed = ref.watch(swapBalancesProvider.select((r) => r.failed));
+  final registry = ref.watch(interchainRegistryProvider);
+  return [
+    for (final account in ref.watch(chainAccountsProvider))
+      if (failed.contains(account.chain.chainId) ||
+          (!now.containsKey(account.chain.chainId) &&
+              (registry.get(account.chain.chainId) != null &&
+                  lcdEndpointsFromChain(
+                    registry.get(account.chain.chainId)!,
+                  ).isNotEmpty)))
+        account.chain,
+  ];
 });
 
 /// The Osmosis side of the To list, and why it is missing when it is.
@@ -1194,6 +1207,7 @@ final swapViewProvider = Provider<SwapView>((ref) {
   final data = ref.watch(swapDataProvider).valueOrNull;
   final accounts = ref.watch(chainAccountsProvider);
   final holdings = ref.watch(swapHoldingsProvider);
+  final held = ref.watch(swapBalancesNowProvider);
   final osmosis = ref.watch(osmosisSwapAssetsProvider);
   final routes = ref.watch(xcsRouteTableProvider);
   final venue = ref.watch(swapVenueStatusProvider);
@@ -1206,7 +1220,7 @@ final swapViewProvider = Provider<SwapView>((ref) {
         for (final account in accounts)
           SwapChain(account.chain, account.address),
       ],
-      holdings: holdings.valueOrNull ?? const {},
+      holdings: held,
       holdingsLoaded: holdings.hasValue || holdings.hasError,
       osmosis: osmosis.valueOrNull ?? const OsmosisAssetsRead([]),
       routes: routes.valueOrNull,
