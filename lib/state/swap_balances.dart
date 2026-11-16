@@ -222,7 +222,11 @@ class SwapBalanceController extends StateNotifier<SwapBalanceReads> {
     try {
       // The baseline is read before the packets can have arrived.
       if (dest != null) await refresh([dest]);
-      final before = dest == null ? const <String, String>{} : _amounts(dest);
+      // No read of the destination yet (its baseline read failed too): the
+      // first one that answers becomes the baseline, rather than an empty map
+      // that any balance at all would differ from.
+      var before =
+          dest != null && state.fresh.containsKey(dest) ? _amounts(dest) : null;
       final started = DateTime.now();
 
       final inclusion = await _waitForTx(source, follow.hash);
@@ -238,7 +242,11 @@ class SwapBalanceController extends StateNotifier<SwapBalanceReads> {
         await follow.sleep(pollEvery);
         if (follow.stopped || !mounted) break;
         await refresh([dest]);
-        if (!mapEquals(before, _amounts(dest))) {
+        if (!state.fresh.containsKey(dest)) continue;
+        final now = _amounts(dest);
+        if (before == null) {
+          before = now;
+        } else if (!mapEquals(before, now)) {
           follow.stop();
         }
       }

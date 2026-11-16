@@ -284,6 +284,42 @@ void main() {
       expect(bank.reads['osmosis-1'], after);
       expect(after, greaterThan(2));
     });
+
+    test(
+      'a destination that did not answer before the swap takes its first answer as the baseline',
+      () async {
+        final bank = Bank();
+        final c = make(bank);
+        await settle(c);
+        bank.down.add('osmosis-1');
+        c
+            .read(swapBalancesProvider.notifier)
+            .followSwap(
+              source: chain('cosmoshub-4'),
+              txHash: 'EEE',
+              destinationChainId: 'osmosis-1',
+            );
+        await _until(() => (bank.reads['osmosis-1'] ?? 0) >= 1);
+        bank.down.clear();
+        // The balance it then reads is unchanged: the watch keeps reading
+        // instead of taking that first answer for the swap's arrival.
+        await _until(() => (bank.reads['osmosis-1'] ?? 0) >= 4);
+        final watching = bank.reads['osmosis-1']!;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(bank.reads['osmosis-1']!, greaterThan(watching));
+
+        bank.uosmo['osmosis-1'] = '60000000';
+        await _until(
+          () =>
+              c.read(swapBalancesNowProvider)['osmosis-1']!.single.amount ==
+              '60000000',
+        );
+        final arrived = bank.reads['osmosis-1']!;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        // Stopped: at most the closing read of both ends came after it.
+        expect(bank.reads['osmosis-1']! - arrived, lessThanOrEqualTo(1));
+      },
+    );
   });
 
   group('showing the tab', () {
